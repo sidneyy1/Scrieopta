@@ -1,4 +1,23 @@
--- Saber Simulator - Auto-Swing + Auto-Sell + Auto-Buy Saber + Auto-Buy DNA (MAIN script, v16 - Rayfield)
+-- Saber Simulator - Auto-Swing + Auto-Sell + Auto-Buy Saber + Auto-Buy DNA (MAIN script, v17 - Rayfield)
+-- v17: built from YOUR full-game export (Saber_Export.zip - the client
+-- scripts, not just ReplicatedStorage). What the export proved:
+--   * UpdateClientData sends (fullData) ONCE at join, then only
+--     (newValue, "Tag") updates - our old handler only understood the full
+--     table, so it never saw any data and DNA showed "?". Now the handler
+--     mirrors the game's own ClientDataManager exactly, and re-requests
+--     the full data until it arrives.
+--   * Data DOES have Best_DNA_Index (the Shop reads it) - so the next DNA
+--     is DNAs_Order[Best_DNA_Index + 1], no more cycling through all DNAs.
+--   * Buying does NOT equip: the shop has separate Buy / Equip buttons, so
+--     a bought saber/DNA sat unused. Now we fire EquipWeapon / EquipDNA
+--     once a buy is confirmed in the data.
+--   * SwingCooldown is 0.6s (0.3s with QuickClick pass) - our 0.25s swing
+--     delay fired faster than the server cooldown and wasted swings. The
+--     swing delay is now the live cooldown + 0.05s.
+--   * SellStrength:FireServer() takes NO args (game's own AutoModule does
+--     exactly that) - our sell call was already right.
+--   * SwingSaber:FireServer(hitTable) takes ONE table arg (the mobs hit) -
+--     we now pass {} (empty = swinging at air, like the real client).
 -- v7: GUI switched to Rayfield (Sirius) - https://docs.sirius.menu/rayfield/
 --   local Rayfield = loadstring(game:HttpGet('https://sirius.menu/rayfield'))()
 --   Rayfield is the most-used UI on mobile executors, with a built-in
@@ -83,6 +102,8 @@ local AUTO_BUY_DNA = false -- Auto-Buy DNA is an OPTION, off by default (it spen
 local BUY_CHECK_EVERY = 5
 local BUY_DNA_ACTION = "BuyDNA" -- CONFIRMED by RemoteSpy: UIAction:FireServer("BuyDNA", "Berzerk DNA")
 local BUY_ACTION = "BuyWeapon" -- CONFIRMED by RemoteSpy: UIAction:FireServer("BuyWeapon", "Daze")
+local EQUIP_ACTION = "EquipWeapon" -- from the game's Shop module: buying does NOT equip, Equip is a separate UIAction
+local EQUIP_DNA_ACTION = "EquipDNA" -- same for DNA
 -- ====================
 
 local running = false
@@ -304,8 +325,8 @@ local DNAsOrder = ItemInfo.DNAs_Order -- sorted by MaxStorage, VIP DNA + Infinit
 local InfiniteMath = require(ReplicatedStorage.Modules.InfiniteMath)
 
 local clientData = nil
-local buyCursor = 1 -- persistent cursor for the blind cycle: moves through ALL sabers, wraps to 1
-local dnaCursor = 1 -- same for DNA
+local clientDataKeys = ""
+local indexOfDNA -- forward-declared: defined in the DNA section below
 local lastBuyTarget = nil
 local lastBuyDNATarget = nil
 
@@ -314,41 +335,90 @@ local function indexOfSaber(name)
 	return 0
 end
 
-pcall(function()
-	Events.UpdateClientData.OnClientEvent:Connect(function(...)
-		-- The server may send the data as the 1st arg, or after another arg,
-		-- so scan all args for the table that looks like player data.
-		local data = nil
-		for _, a in ipairs({...}) do
-			if type(a) == "table" then
-				if a.Coins ~= nil or a.Saber ~= nil or a.DNA ~= nil or a.Data ~= nil or a.Best_Saber_Index ~= nil then data = a break end
-				if not data then data = a end
+-- v17: mirror the game's own ClientDataManager handler, from your export.
+-- UpdateClientData sends (fullData) ONCE when you join, then only
+-- (newValue, "Tag") updates - e.g. (25000000, "Coins") or ("Pattern DNA",
+-- "DNA") - and tags can be nested ("Boosts:AutoTime"). Our old handler
+-- only understood the full table, and this script loads AFTER you joined,
+-- so it only ever saw updates and clientData stayed nil forever - that's
+-- why DNA showed "?". This handler applies every form the same way the
+-- game does, so the data stays live.
+local function applyClientData(value, tag)
+	if tag == nil then
+		if type(value) == "table" then clientData = value end
+		return
+	end
+	if type(tag) == "table" and type(value) == "table" then
+		-- Batch update: value is {Tag = newValue, ...}
+		for k, v in pairs(value) do applyClientData(v, k) end
+		return
+	end
+	if type(tag) ~= "string" then return end
+	if not clientData then clientData = {} end
+	if value == "nil" then value = nil end
+	local parts = string.split(tag, ":")
+	if #parts == 2 then
+		if type(clientData[parts[1]]) ~= "table" then clientData[parts[1]] = {} end
+		clientData[parts[1]][parts[2]] = value
+	else
+		clientData[tag] = value
+	end
+end
+
+local function onClientData(value, tag)
+	applyClientData(value, tag)
+	if not clientData then return end
+	-- Record the top-level keys the game actually sends, so the DNA line
+	-- can show them when auto-detect fails (tells us the real field name).
+	if clientDataKeys == "" then
+		local keys = {}
+		for k, _ in pairs(clientData) do table.insert(keys, tostring(k)) end
+		table.sort(keys)
+		clientDataKeys = table.concat(keys, ", ")
+		print("[AutoFarm] clientData keys: " .. clientDataKeys)
+	end
+	-- Buy confirmations + auto-equip. Buying does NOT equip in this game
+	-- (the shop has separate Buy / Equip buttons), so a bought saber/DNA
+	-- would sit unused until EquipWeapon / EquipDNA is fired for it.
+	if lastBuyTarget then
+		local idx = indexOfSaber(lastBuyTarget)
+		if clientData.Best_Saber_Index and idx > 0 and idx <= clientData.Best_Saber_Index then
+			print("[AutoFarm] Bought saber confirmed: " .. lastBuyTarget)
+			if clientData.Saber ~= lastBuyTarget then
+				pcall(function() UIAction:FireServer(EQUIP_ACTION, lastBuyTarget) end)
+				print("[AutoFarm] Equipping saber: " .. lastBuyTarget)
 			end
-		end
-		if not data then return end
-		clientData = data
-		-- Record the top-level keys the game actually sends, so the DNA line
-		-- can show them when auto-detect fails (tells us the real field name).
-		if clientDataKeys == "" then
-			local keys = {}
-			for k, _ in pairs(data) do table.insert(keys, tostring(k)) end
-			table.sort(keys)
-			clientDataKeys = table.concat(keys, ", ")
-			print("[AutoFarm] clientData keys: " .. clientDataKeys)
-		end
-		local saber = data.Saber or data.CurrentSaber or data.EquippedSaber
-		if saber and lastBuyTarget and saber == lastBuyTarget then
-			print("[AutoFarm] Bought saber confirmed: " .. saber)
 			lastBuyTarget = nil
 		end
-		if data.DNA and lastBuyDNATarget and data.DNA == lastBuyDNATarget then
-			print("[AutoFarm] Bought DNA confirmed: " .. data.DNA)
-			updateDNAInfo("Bought DNA confirmed: " .. data.DNA)
+	end
+	if lastBuyDNATarget then
+		local idx = indexOfDNA(lastBuyDNATarget)
+		if clientData.Best_DNA_Index and idx > 0 and idx <= clientData.Best_DNA_Index then
+			print("[AutoFarm] Bought DNA confirmed: " .. lastBuyDNATarget)
+			updateDNAInfo("Bought DNA confirmed: " .. lastBuyDNATarget)
+			if clientData.DNA ~= lastBuyDNATarget then
+				pcall(function() UIAction:FireServer(EQUIP_DNA_ACTION, lastBuyDNATarget) end)
+				print("[AutoFarm] Equipping DNA: " .. lastBuyDNATarget)
+			end
 			lastBuyDNATarget = nil
 		end
-		if updateOwnedInfo then pcall(updateOwnedInfo) end
+	end
+	if updateOwnedInfo then pcall(updateOwnedInfo) end
+end
+
+pcall(function()
+	Events.UpdateClientData.OnClientEvent:Connect(function(a, b) onClientData(a, b) end)
+	-- Re-request the full data until it arrives (same as the game's own
+	-- RequestDataFromServer loop): the first full-data event fired before
+	-- this script loaded, so ask for it again.
+	task.spawn(function()
+		for _ = 1, 60 do
+			if unloaded then break end
+			if clientData then break end
+			pcall(function() Events.RequestClientData:FireServer() end)
+			task.wait(0.5)
+		end
 	end)
-	Events.RequestClientData:FireServer()
 end)
 
 -- Coins are InfiniteMath values in this game (table {first, second} or
@@ -421,54 +491,37 @@ local function tryBuySaber()
 	if not AUTO_BUY or unloaded then return end
 	local coinsIM, coinsSource = getCoinsIM()
 	local current = getCurrentSaber()
-	local currentGain = (current and Swords[current] and Swords[current].AmountPerClick) or 0
-	print("[AutoFarm] Buy check: Coins=" .. (coinsIM and tostring(coinsIM) or "UNKNOWN") .. " source=" .. tostring(coinsSource) .. " current=" .. tostring(current))
-	updateBuyInfo("Coins: " .. (coinsIM and tostring(coinsIM) or "UNKNOWN") .. " | Current: " .. tostring(current))
-
+	-- v17: the shop itself buys the NEXT saber after your best owned one
+	-- (MoveToBestItem: Swords_Order[Best_Saber_Index + 1]). No more
+	-- "best affordable" skipping ahead, no more blind cycling - the server
+	-- only sells the next one in order, so aiming anywhere else is rejected.
+	local bestIdx = (clientData and clientData.Best_Saber_Index) or (current and indexOfSaber(current)) or 0
+	local nextName = SwordsOrder[bestIdx + 1]
+	print("[AutoFarm] Buy check: Coins=" .. (coinsIM and tostring(coinsIM) or "UNKNOWN") .. " source=" .. tostring(coinsSource) .. " current=" .. tostring(current) .. " bestIdx=" .. bestIdx .. " next=" .. tostring(nextName))
+	updateBuyInfo("Coins: " .. (coinsIM and tostring(coinsIM) or "UNKNOWN") .. " | Current: " .. tostring(current) .. " | Next: " .. tostring(nextName))
+	if not nextName then
+		updateBuyInfo("You own the last saber | Coins: " .. (coinsIM and tostring(coinsIM) or "?"))
+		return
+	end
+	local info = Swords[nextName]
+	if not info then return end
+	if info.Currency == "Robux" or info.PassId then
+		updateBuyInfo("Next saber is Robux-only: " .. nextName)
+		return
+	end
 	if coinsIM then
-		-- Best affordable saber BETTER than current, compared with InfiniteMath
-		local target = nil
-		for _, name in ipairs(SwordsOrder) do
-			local info = Swords[name]
-			if info and info.AmountPerClick > currentGain then
-				local priceIM = toIM(info.Price)
-				if priceIM and coinsIM >= priceIM then
-					if not target or info.AmountPerClick > Swords[target].AmountPerClick then target = name end
-				end
-			end
-		end
-		if not target then
-			print("[AutoFarm] Buy check: no affordable upgrade yet")
-			updateBuyInfo("No affordable upgrade yet | Coins: " .. tostring(coinsIM) .. " | Current: " .. tostring(current))
+		local priceIM = toIM(info.Price)
+		if priceIM and coinsIM < priceIM then
+			updateBuyInfo("Next saber not affordable yet: " .. nextName .. " (" .. tostring(info.Price) .. ") | Coins: " .. tostring(coinsIM))
 			return
 		end
-		print("[AutoFarm] Buying best: " .. target .. " price=" .. tostring(Swords[target].Price))
-		updateBuyInfo("Buying: " .. target .. " | Price: " .. tostring(Swords[target].Price))
-		if useRayfield then pcall(function() Rayfield:Notify({ Title = "Auto-Buy", Content = "Buying " .. target, Duration = 3 }) end) end
-		lastBuyTarget = target
-		local args = { BUY_ACTION, target }
-		pcall(function() UIAction:FireServer(unpack(args)) end)
-	else
-		-- Coins STILL unknown: cycle through ALL sabers in batches of 20,
-		-- starting where we left off, wrapping around. The server rejects
-		-- unaffordable ones and buys affordable ones, wherever you are
-		-- in the progression - not just the first 10 cheap ones.
-		if current then buyCursor = indexOfSaber(current) + 1 end
-		if buyCursor < 1 or buyCursor > #SwordsOrder then buyCursor = 1 end
-		local last = math.min(buyCursor + 19, #SwordsOrder)
-		print("[AutoFarm] Buy check: Coins unknown - trying sabers " .. buyCursor .. "-" .. last .. " of " .. #SwordsOrder)
-		for i = buyCursor, last do
-			if unloaded then break end
-			local name = SwordsOrder[i]
-			print("[AutoFarm] Trying: " .. name .. " price=" .. tostring(Swords[name].Price))
-			lastBuyTarget = name
-			local args = { BUY_ACTION, name }
-			pcall(function() UIAction:FireServer(unpack(args)) end)
-			task.wait(0.15)
-		end
-		buyCursor = last + 1
-		if buyCursor > #SwordsOrder then buyCursor = 1 end
 	end
+	-- Coins unknown: try it anyway - the server rejects unaffordable buys.
+	print("[AutoFarm] Buying saber: " .. nextName .. " price=" .. tostring(info.Price))
+	updateBuyInfo("Buying: " .. nextName .. " | Price: " .. tostring(info.Price))
+	if useRayfield then pcall(function() Rayfield:Notify({ Title = "Auto-Buy", Content = "Buying " .. nextName, Duration = 3 }) end) end
+	lastBuyTarget = nextName
+	pcall(function() UIAction:FireServer(BUY_ACTION, nextName) end)
 end
 
 -- ===== AUTO-BUY DNA (v8, fixed v9) =====
@@ -504,7 +557,7 @@ end
 -- Coins, and once the cursor passes the last affordable DNA it wraps back to
 -- the start, so after Checkered is bought it re-tries Beast, Alien, etc. -
 -- the next one each time - instead of marching on to DNAs you can't afford.
-local function indexOfDNA(name)
+indexOfDNA = function(name)
 	for i, n in ipairs(DNAsOrder) do if n == name then return i end end
 	return 0
 end
@@ -521,7 +574,6 @@ end
 -- If all 3 fail it shows the data keys on screen, so we can see what the
 -- game actually sent and use the right key next time.
 local currentDNAOverride = nil
-local clientDataKeys = ""
 local function findDNAInTable(t)
 	if type(t) ~= "table" then return nil end
 	if type(t.DNA) == "string" and DNAs[t.DNA] then return t.DNA end
@@ -570,6 +622,9 @@ updateOwnedInfo = function()
 	local dnaText = dna or "?"
 	if dna and DNAs[dna] then
 		dnaText = dna .. " (" .. tostring(DNAs[dna].MaxStorage) .. " storage)"
+		if clientData and clientData.Best_DNA_Index then
+			dnaText = dnaText .. " | Best index: " .. tostring(clientData.Best_DNA_Index)
+		end
 	elseif not clientData then
 		dnaText = "? (no game data yet - press Show My Saber & DNA)"
 	elseif clientDataKeys ~= "" then
@@ -594,105 +649,37 @@ local function tryBuyDNA()
 	dnaAttempts += 1
 	local coinsIM, coinsSource = getCoinsIM()
 	local current = getCurrentDNA()
-	local currentStorage = (current and DNAs[current] and DNAs[current].MaxStorage) or 0
-	print("[AutoFarm] DNA check #" .. dnaAttempts .. ": Coins=" .. (coinsIM and tostring(coinsIM) or "UNKNOWN") .. " current=" .. tostring(current))
-	updateDNAInfo("Check #" .. dnaAttempts .. " | Coins: " .. (coinsIM and tostring(coinsIM) or "UNKNOWN") .. " | Current: " .. tostring(current))
-
-	if coinsIM then
-		if not current then
-			-- Current DNA unknown: try a BATCH of affordable DNAs per check.
-			-- Only DNAs priced at or below your Coins are tried - Surge DNA
-			-- (3.99e226) and the rest of the endgame list can never come up
-			-- when you have 25M Coins. The cursor wraps back to the start
-			-- after the last affordable DNA, so after Checkered is bought
-			-- the next check re-tries Beast, Alien, etc. - the new next one.
-			local affordIdx = 1
-			for i = 2, #DNAsOrder do
-				local info = DNAs[DNAsOrder[i]]
-				if info and info.Currency ~= "Robux" then
-					local priceIM = toIM(info.Price)
-					if priceIM and coinsIM >= priceIM then affordIdx = i end
-				end
-			end
-			if affordIdx < 2 then
-				updateDNAInfo("No affordable DNA yet | Coins: " .. tostring(coinsIM))
-				return
-			end
-			if dnaCursor < 2 or dnaCursor > affordIdx then dnaCursor = 2 end
-			local last = math.min(dnaCursor + 19, affordIdx)
-			print("[AutoFarm] DNA check: current unknown - trying affordable DNAs " .. dnaCursor .. "-" .. last .. " of " .. affordIdx .. " | Coins: " .. tostring(coinsIM))
-			updateDNAInfo("Current DNA unknown - trying affordable DNAs " .. dnaCursor .. "-" .. last .. " | Coins: " .. tostring(coinsIM))
-			for i = dnaCursor, last do
-				if unloaded then break end
-				local name = DNAsOrder[i]
-				local info = DNAs[name]
-				if info and info.Currency ~= "Robux" then
-					local priceIM = toIM(info.Price)
-					if priceIM and coinsIM >= priceIM then
-						print("[AutoFarm] Trying DNA: " .. name .. " price=" .. tostring(info.Price))
-						lastBuyDNATarget = name
-						local args = { BUY_DNA_ACTION, name }
-						pcall(function() UIAction:FireServer(unpack(args)) end)
-						task.wait(0.15)
-					end
-				end
-			end
-			dnaCursor = last + 1
-			if dnaCursor > affordIdx then dnaCursor = 2 end
-			return
-		end
-		-- NEXT DNA above current, affordable, Coins only (skip Robux).
-		-- DNAs_Order is sorted by MaxStorage, so the first match IS the next one.
-		-- Do NOT skip ahead to the best affordable: the server only sells the
-		-- next DNA in order, and a skipped-ahead buy is rejected silently.
-		-- NOTE: prices can be tables for endgame DNAs - never compare a price
-		-- with `> 0` directly (that errors on tables); use toIM() instead.
-		local target = nil
-		for _, name in ipairs(DNAsOrder) do
-			local info = DNAs[name]
-			if info and info.Currency ~= "Robux" and info.MaxStorage > currentStorage then
-				local priceIM = toIM(info.Price)
-				if priceIM then
-					if coinsIM >= priceIM then target = name break end
-					-- Next DNA not affordable yet: stop, don't look further ahead
-					break
-				end
-				-- Unreadable price: skip this DNA, keep looking
-			end
-		end
-		if not target then
-			print("[AutoFarm] DNA check: next DNA not affordable yet")
-			updateDNAInfo("Next DNA not affordable yet | Coins: " .. tostring(coinsIM) .. " | Current: " .. tostring(current))
-			return
-		end
-		print("[AutoFarm] Buying DNA: " .. target .. " price=" .. tostring(DNAs[target].Price))
-		updateDNAInfo("Sent buy for DNA: " .. target .. " | Price: " .. tostring(DNAs[target].Price) .. " | Coins: " .. tostring(coinsIM))
-		if useRayfield then pcall(function() Rayfield:Notify({ Title = "Auto-Buy DNA", Content = "Buying " .. target, Duration = 3 }) end) end
-		lastBuyDNATarget = target
-		local args = { BUY_DNA_ACTION, target }
-		pcall(function() UIAction:FireServer(unpack(args)) end)
-	else
-		-- Coins unknown: cycle through ALL DNAs in batches of 20, like sabers,
-		-- number-priced only (skip table-priced endgame DNAs like Mirage).
-		if current then dnaCursor = indexOfDNA(current) + 1 end
-		if dnaCursor < 2 or dnaCursor > #DNAsOrder then dnaCursor = 2 end -- skip Basic (price 0)
-		local last = math.min(dnaCursor + 19, #DNAsOrder)
-		print("[AutoFarm] DNA check: Coins unknown - trying DNAs " .. dnaCursor .. "-" .. last .. " of " .. #DNAsOrder)
-		for i = dnaCursor, last do
-			if unloaded then break end
-			local name = DNAsOrder[i]
-			local info = DNAs[name]
-			if info and info.Currency ~= "Robux" and type(info.Price) == "number" then
-				print("[AutoFarm] Trying DNA: " .. name .. " price=" .. tostring(info.Price))
-				lastBuyDNATarget = name
-				local args = { BUY_DNA_ACTION, name }
-				pcall(function() UIAction:FireServer(unpack(args)) end)
-				task.wait(0.15)
-			end
-		end
-		dnaCursor = last + 1
-		if dnaCursor > #DNAsOrder then dnaCursor = 2 end
+	-- v17: next DNA = DNAs_Order[Best_DNA_Index + 1], exactly like the
+	-- shop's MoveToBestItem. The export proved Best_DNA_Index IS in the
+	-- data, so there is no more cycling, no batches, no Surge/Mirage -
+	-- one target per check, the next one in order.
+	local bestIdx = (clientData and clientData.Best_DNA_Index) or (current and indexOfDNA(current)) or 0
+	local nextName = DNAsOrder[bestIdx + 1]
+	print("[AutoFarm] DNA check #" .. dnaAttempts .. ": Coins=" .. (coinsIM and tostring(coinsIM) or "UNKNOWN") .. " current=" .. tostring(current) .. " bestIdx=" .. bestIdx .. " next=" .. tostring(nextName))
+	updateDNAInfo("Check #" .. dnaAttempts .. " | Coins: " .. (coinsIM and tostring(coinsIM) or "UNKNOWN") .. " | Current: " .. tostring(current) .. " | Next: " .. tostring(nextName))
+	if not nextName then
+		updateDNAInfo("You own the last DNA | Coins: " .. (coinsIM and tostring(coinsIM) or "?"))
+		return
 	end
+	local info = DNAs[nextName]
+	if not info then return end
+	if info.Currency == "Robux" or info.PassId then
+		updateDNAInfo("Next DNA is Robux-only: " .. nextName)
+		return
+	end
+	if coinsIM then
+		local priceIM = toIM(info.Price)
+		if priceIM and coinsIM < priceIM then
+			updateDNAInfo("Next DNA not affordable yet: " .. nextName .. " (" .. tostring(info.Price) .. ") | Coins: " .. tostring(coinsIM) .. " | Current: " .. tostring(current))
+			return
+		end
+	end
+	-- Coins unknown: try it anyway - the server rejects unaffordable buys.
+	print("[AutoFarm] Buying DNA: " .. nextName .. " price=" .. tostring(info.Price))
+	updateDNAInfo("Sent buy for DNA: " .. nextName .. " | Price: " .. tostring(info.Price) .. " | Coins: " .. (coinsIM and tostring(coinsIM) or "?"))
+	if useRayfield then pcall(function() Rayfield:Notify({ Title = "Auto-Buy DNA", Content = "Buying " .. nextName, Duration = 3 }) end) end
+	lastBuyDNATarget = nextName
+	pcall(function() UIAction:FireServer(BUY_DNA_ACTION, nextName) end)
 end
 
 -- ===== RAYFIELD CONTROLS (Main tab) - skipped if Rayfield failed, simple GUI is already wired above =====
@@ -827,11 +814,22 @@ task.spawn(function()
 	end
 end)
 
+-- v17: the server's swing cooldown is 0.6s (0.3s with the QuickClick
+-- pass) - StatsCalculator.GetSwingCooldown. Firing every 0.25s wasted
+-- most swings, so the delay is now the live cooldown + 0.05s (never
+-- below the slider value). SwingSaber takes one table arg (mobs hit) -
+-- {} means swinging at air, like the real client with nothing nearby.
+local function getSwingDelay()
+	local cd = clientData and clientData.SwingCooldown
+	if type(cd) == "number" and cd > 0 then return math.max(SWING_DELAY, cd + 0.05) end
+	return math.max(SWING_DELAY, 0.65)
+end
+
 -- Main swing/sell loop
 task.spawn(function()
 	while not unloaded do
 		if running then
-			local ok, err = pcall(function() SwingSaber:FireServer() end)
+			local ok, err = pcall(function() SwingSaber:FireServer({}) end)
 			if ok then
 				swingCount += 1
 				updateStatus("Running | Swings: " .. swingCount)
@@ -839,7 +837,7 @@ task.spawn(function()
 					doSell("every " .. SELL_EVERY_SWINGS .. " swings / " .. SELL_EVERY_SECONDS .. "s")
 				end
 			else warn("[AutoFarm] Swing failed: " .. tostring(err)) task.wait(1) end
-			task.wait(SWING_DELAY)
+			task.wait(getSwingDelay())
 		else task.wait(0.2) end
 	end
 end)
@@ -856,4 +854,4 @@ end)
 if useRayfield then
 	pcall(function() Rayfield:Notify({ Title = "Saber Auto-Farm", Content = "Loaded. Turn on Auto-Farm in the Main tab.", Duration = 5 }) end)
 end
-print("[AutoFarm] Loaded v16 (Rayfield + DNA ? diagnosis" .. (useRayfield and "" or " FAILED - simple GUI") .. " + InfiniteMath Coins fix). Minimize: Rayfield top-bar button. Unload: button in Main tab.")
+print("[AutoFarm] Loaded v17 (Rayfield + real client-data handler + Best_DNA_Index next-buy + auto-equip + cooldown swing delay" .. (useRayfield and "" or " FAILED - simple GUI") .. " + InfiniteMath Coins fix). Minimize: Rayfield top-bar button. Unload: button in Main tab.")
