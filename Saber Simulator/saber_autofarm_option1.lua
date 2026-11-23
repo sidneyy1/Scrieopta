@@ -1,4 +1,7 @@
--- Saber Simulator - Auto-Swing + Auto-Sell + Auto-Buy Saber (MAIN script, v5)
+-- Saber Simulator - Auto-Swing + Auto-Sell + Auto-Buy Saber (MAIN script, v6 - WindUI)
+-- GUI: WindUI by Footagesus - https://github.com/Footagesus/WindUI
+--   local WindUI = loadstring(game:HttpGet("https://raw.githubusercontent.com/Footagesus/WindUI/main/dist/main.lua"))()
+--   Minimize/reopen: RightShift (WindUI toggle key) or the floating Open button | Unload: "Unload Script" button in the Main tab
 -- Based ONLY on ReplicatedStorage export (Saber.zip)
 --   ReplicatedStorage/Events/SwingSaber   -> gains Strength
 --   ReplicatedStorage/Events/SellStrength -> converts Strength to Coins
@@ -40,115 +43,79 @@ local BUY_ACTION = "BuyWeapon" -- CONFIRMED by RemoteSpy: UIAction:FireServer("B
 -- ====================
 
 local running = false
-local unloaded = false -- set to true by the X button, all loops check this and stop
+local unloaded = false -- set to true by the Unload button, all loops check this and stop
 local swingCount = 0
 local lastSell = tick()
 
-local gui = Instance.new("ScreenGui")
-gui.Name = "SaberAutoFarm"
-gui.ResetOnSpawn = false
-gui.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
+-- ===== WINDUI GUI =====
+local WindUI = loadstring(game:HttpGet("https://raw.githubusercontent.com/Footagesus/WindUI/main/dist/main.lua"))()
 
--- Main panel (holds everything, so Minimize can hide it in one go)
-local mainFrame = Instance.new("Frame")
-mainFrame.Size = UDim2.new(0, 200, 0, 96)
-mainFrame.Position = UDim2.new(0, 16, 0, 120)
-mainFrame.BackgroundColor3 = Color3.fromRGB(30, 30, 30)
-mainFrame.BorderSizePixel = 0
-mainFrame.Parent = gui
+local Window = WindUI:CreateWindow({
+	Title = "Saber Simulator",
+	Folder = "SaberAutoFarm",
+	Icon = "swords",
+	NewElements = true,
+	OpenButton = {
+		Title = "Open Saber UI",
+		Enabled = true, -- floating button to reopen after minimizing
+		Draggable = true,
+	},
+	Topbar = {
+		ButtonsType = "Mac", -- minimize / close buttons in the top bar
+	},
+})
+pcall(function() Window:SetToggleKey(Enum.KeyCode.RightShift) end) -- RightShift = minimize / reopen
 
-local title = Instance.new("TextLabel")
-title.Size = UDim2.new(1, -64, 0, 24)
-title.Position = UDim2.new(0, 8, 0, 0)
-title.BackgroundTransparency = 1
-title.TextColor3 = Color3.fromRGB(255, 255, 255)
-title.TextSize = 14
-title.Font = Enum.Font.SourceSansBold
-title.TextXAlignment = Enum.TextXAlignment.Left
-title.Text = "Saber Auto-Farm"
-title.Parent = mainFrame
+local MainTab = Window:Tab({
+	Title = "Main",
+	Icon = "swords",
+})
 
--- Minimize button (–): hides the panel, shows a small restore button instead
-local minimizeBtn = Instance.new("TextButton")
-minimizeBtn.Size = UDim2.new(0, 24, 0, 24)
-minimizeBtn.Position = UDim2.new(1, -56, 0, 0)
-minimizeBtn.BackgroundColor3 = Color3.fromRGB(60, 60, 60)
-minimizeBtn.TextColor3 = Color3.fromRGB(255, 255, 255)
-minimizeBtn.TextSize = 16
-minimizeBtn.Font = Enum.Font.SourceSansBold
-minimizeBtn.Text = "–"
-minimizeBtn.Parent = mainFrame
+local statusPara = MainTab:Paragraph({
+	Title = "Status",
+	Desc = "Stopped | Swings: 0",
+})
 
--- Close / Unload button (X): stops everything and removes the script's GUI
-local closeBtn = Instance.new("TextButton")
-closeBtn.Size = UDim2.new(0, 24, 0, 24)
-closeBtn.Position = UDim2.new(1, -28, 0, 0)
-closeBtn.BackgroundColor3 = Color3.fromRGB(170, 40, 40)
-closeBtn.TextColor3 = Color3.fromRGB(255, 255, 255)
-closeBtn.TextSize = 16
-closeBtn.Font = Enum.Font.SourceSansBold
-closeBtn.Text = "X"
-closeBtn.Parent = mainFrame
+local buyPara = MainTab:Paragraph({
+	Title = "Buy",
+	Desc = "Auto-Buy: ON - waiting for first check (every 5s while running)",
+})
 
--- Small floating button shown while minimized - click to restore the panel
-local miniBtn = Instance.new("TextButton")
-miniBtn.Size = UDim2.new(0, 64, 0, 28)
-miniBtn.Position = UDim2.new(0, 16, 0, 120)
-miniBtn.BackgroundColor3 = Color3.fromRGB(30, 30, 30)
-miniBtn.TextColor3 = Color3.fromRGB(255, 255, 255)
-miniBtn.TextSize = 14
-miniBtn.Font = Enum.Font.SourceSansBold
-miniBtn.Text = "Saber +"
-miniBtn.Visible = false
-miniBtn.Parent = gui
+-- Paragraph update methods vary by WindUI version, so try each in pcall
+-- and fall back to the console print (status is always printed there too).
+local function updateStatus(text)
+	pcall(function() statusPara:SetDesc(text) end)
+	pcall(function() statusPara:SetTitle(text) end)
+end
+local function updateBuyInfo(text)
+	pcall(function() buyPara:SetDesc(text) end)
+	pcall(function() buyPara:SetTitle(text) end)
+end
 
-local button = Instance.new("TextButton")
-button.Size = UDim2.new(0, 184, 0, 36)
-button.Position = UDim2.new(0, 8, 0, 28)
-button.BackgroundColor3 = Color3.fromRGB(50, 50, 50)
-button.TextColor3 = Color3.fromRGB(255, 255, 255)
-button.TextSize = 16
-button.Font = Enum.Font.SourceSansBold
-button.Text = "START Auto-Farm"
-button.Parent = mainFrame
-
-local status = Instance.new("TextLabel")
-status.Size = UDim2.new(1, -16, 0, 22)
-status.Position = UDim2.new(0, 8, 0, 68)
-status.BackgroundTransparency = 1
-status.TextColor3 = Color3.fromRGB(255, 255, 255)
-status.TextSize = 14
-status.Text = "Stopped | Swings: 0"
-status.Parent = mainFrame
-
-pcall(function() gui.Parent = game:GetService("CoreGui") end)
-if not gui.Parent then gui.Parent = Players.LocalPlayer:WaitForChild("PlayerGui") end
+local autoFarmToggle = nil -- created in the controls section below
 
 local function unload()
 	if unloaded then return end
 	unloaded = true
 	running = false
 	print("[AutoFarm] Unloaded - all loops stopped, GUI removed. Re-run the loadstring to start again.")
-	pcall(function() gui:Destroy() end)
+	pcall(function() Window:Destroy() end)
 end
-
-minimizeBtn.MouseButton1Click:Connect(function()
-	mainFrame.Visible = false
-	miniBtn.Visible = true
-end)
-miniBtn.MouseButton1Click:Connect(function()
-	mainFrame.Visible = true
-	miniBtn.Visible = false
-end)
-closeBtn.MouseButton1Click:Connect(unload)
 
 local function setRunning(value)
 	if unloaded then return end
 	running = value
-	button.Text = running and "STOP Auto-Farm" or "START Auto-Farm"
-	button.BackgroundColor3 = running and Color3.fromRGB(170, 40, 40) or Color3.fromRGB(50, 50, 50)
-	if not running then status.Text = "Stopped | Swings: " .. swingCount end
+	if running then
+		updateStatus("Running | Swings: " .. swingCount)
+	else
+		updateStatus("Stopped | Swings: " .. swingCount)
+	end
 end
+
+-- Toggles / sliders are created after the buy functions below, because
+-- the "Buy Now" button needs tryBuySaber - see the GUI controls section
+-- at the end of the buy code. setRunning / unload are defined here so
+-- those controls can call them.
 
 local function doSell(reason)
 	local ok, err = pcall(function() SellStrength:FireServer() end)
@@ -156,10 +123,12 @@ local function doSell(reason)
 	else warn("[AutoFarm] Sell failed: " .. tostring(err)) end
 end
 
-button.MouseButton1Click:Connect(function() setRunning(not running) end)
 game:GetService("UserInputService").InputBegan:Connect(function(input, g)
-	if g then return end
-	if input.KeyCode == Enum.KeyCode.F then setRunning(not running) end
+	if g or unloaded then return end
+	if input.KeyCode == Enum.KeyCode.F then
+		setRunning(not running)
+		if autoFarmToggle then pcall(function() autoFarmToggle:Set(running) end) end
+	end
 end)
 
 -- ===== AUTO-BUY SABER (v5: InfiniteMath Coins) =====
@@ -262,6 +231,7 @@ local function tryBuySaber()
 	local current = getCurrentSaber()
 	local currentGain = (current and Swords[current] and Swords[current].AmountPerClick) or 0
 	print("[AutoFarm] Buy check: Coins=" .. (coinsIM and tostring(coinsIM) or "UNKNOWN") .. " source=" .. tostring(coinsSource) .. " current=" .. tostring(current))
+	updateBuyInfo("Coins: " .. (coinsIM and tostring(coinsIM) or "UNKNOWN") .. " | Current: " .. tostring(current))
 
 	if coinsIM then
 		-- Best affordable saber BETTER than current, compared with InfiniteMath
@@ -277,9 +247,12 @@ local function tryBuySaber()
 		end
 		if not target then
 			print("[AutoFarm] Buy check: no affordable upgrade yet")
+			updateBuyInfo("No affordable upgrade yet | Coins: " .. tostring(coinsIM) .. " | Current: " .. tostring(current))
 			return
 		end
 		print("[AutoFarm] Buying best: " .. target .. " price=" .. tostring(Swords[target].Price))
+		updateBuyInfo("Buying: " .. target .. " | Price: " .. tostring(Swords[target].Price))
+		pcall(function() WindUI:Notify({ Title = "Auto-Buy", Content = "Buying " .. target, Icon = "check" }) end)
 		lastBuyTarget = target
 		local args = { BUY_ACTION, target }
 		pcall(function() UIAction:FireServer(unpack(args)) end)
@@ -306,6 +279,53 @@ local function tryBuySaber()
 	end
 end
 
+-- ===== WINDUI CONTROLS (Main tab) =====
+autoFarmToggle = MainTab:Toggle({
+	Title = "Auto-Farm (Swing + Sell)",
+	Value = false,
+	Callback = function(state) setRunning(state) end,
+})
+
+MainTab:Toggle({
+	Title = "Auto-Buy Best Saber",
+	Value = true,
+	Callback = function(state)
+		AUTO_BUY = state
+		updateBuyInfo(AUTO_BUY and "Auto-Buy: ON" or "Auto-Buy: OFF")
+	end,
+})
+
+MainTab:Slider({
+	Title = "Swing Delay (seconds)",
+	Step = 0.05,
+	Value = { Min = 0.1, Max = 1, Default = 0.25 },
+	Callback = function(value) SWING_DELAY = value end,
+})
+
+MainTab:Slider({
+	Title = "Sell Every (swings)",
+	Step = 1,
+	Value = { Min = 10, Max = 200, Default = 50 },
+	Callback = function(value) SELL_EVERY_SWINGS = value end,
+})
+
+MainTab:Slider({
+	Title = "Buy Check (seconds)",
+	Step = 1,
+	Value = { Min = 2, Max = 30, Default = 5 },
+	Callback = function(value) BUY_CHECK_EVERY = value end,
+})
+
+MainTab:Button({
+	Title = "Buy Best Saber Now",
+	Callback = function() tryBuySaber() end,
+})
+
+MainTab:Button({
+	Title = "Unload Script",
+	Callback = function() unload() end,
+})
+
 task.spawn(function()
 	while not unloaded do
 		task.wait(BUY_CHECK_EVERY)
@@ -321,7 +341,7 @@ task.spawn(function()
 			local ok, err = pcall(function() SwingSaber:FireServer() end)
 			if ok then
 				swingCount += 1
-				status.Text = "Running | Swings: " .. swingCount
+				updateStatus("Running | Swings: " .. swingCount)
 				if swingCount >= SELL_EVERY_SWINGS or (tick() - lastSell) >= SELL_EVERY_SECONDS then
 					doSell("every " .. SELL_EVERY_SWINGS .. " swings / " .. SELL_EVERY_SECONDS .. "s")
 				end
@@ -331,4 +351,5 @@ task.spawn(function()
 	end
 end)
 
-print("[AutoFarm] Loaded v5 (InfiniteMath Coins fix) + X/Minimize. Click START or press F. – = minimize, X = unload (stops all loops).")
+WindUI:Notify({ Title = "Saber Auto-Farm", Content = "Loaded. Turn on Auto-Farm in the Main tab.", Icon = "check" })
+print("[AutoFarm] Loaded v6 (WindUI + InfiniteMath Coins fix). Minimize: RightShift or the floating Open button. Unload: button in Main tab.")
