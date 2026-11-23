@@ -1,4 +1,4 @@
--- Saber Simulator - Auto-Swing + Auto-Sell + Auto-Buy Saber + Auto-Buy DNA (MAIN script, v12 - Rayfield)
+-- Saber Simulator - Auto-Swing + Auto-Sell + Auto-Buy Saber + Auto-Buy DNA (MAIN script, v13 - Rayfield)
 -- v7: GUI switched to Rayfield (Sirius) - https://docs.sirius.menu/rayfield/
 --   local Rayfield = loadstring(game:HttpGet('https://sirius.menu/rayfield'))()
 --   Rayfield is the most-used UI on mobile executors, with a built-in
@@ -309,6 +309,15 @@ pcall(function()
 	Events.UpdateClientData.OnClientEvent:Connect(function(data)
 		if type(data) ~= "table" then return end
 		clientData = data
+		-- Record the top-level keys the game actually sends, so the DNA line
+		-- can show them when auto-detect fails (tells us the real field name).
+		if clientDataKeys == "" then
+			local keys = {}
+			for k, _ in pairs(data) do table.insert(keys, tostring(k)) end
+			table.sort(keys)
+			clientDataKeys = table.concat(keys, ", ")
+			print("[AutoFarm] clientData keys: " .. clientDataKeys)
+		end
 		local saber = data.Saber or data.CurrentSaber or data.EquippedSaber
 		if saber and lastBuyTarget and saber == lastBuyTarget then
 			print("[AutoFarm] Bought saber confirmed: " .. saber)
@@ -475,8 +484,49 @@ local function indexOfDNA(name)
 	return 0
 end
 
+-- v13: how the script knows your best DNA, so it can buy the NEXT one.
+-- The game's own data is supposed to carry it as data.DNA (StatsCalculator
+-- uses DNAs[data.DNA]), but the data the game actually sends us doesn't
+-- seem to include that field - that's why it fell back to cycling through
+-- all DNAs. So now it detects it 3 ways, in order:
+--  1. Your manual entry (the "My current DNA" box in Rayfield) - always wins.
+--  2. The known field names: DNA / CurrentDNA / EquippedDNA / Best_DNA_Index.
+--  3. A scan of every field in the data for a value that IS a DNA name
+--     (covers it if the game sends it under some other key).
+-- If all 3 fail it shows the data keys on screen, so we can see what the
+-- game actually sent and use the right key next time.
+local currentDNAOverride = nil
+local clientDataKeys = ""
+local function findDNAInTable(t)
+	if type(t) ~= "table" then return nil end
+	if type(t.DNA) == "string" and DNAs[t.DNA] then return t.DNA end
+	if type(t.CurrentDNA) == "string" and DNAs[t.CurrentDNA] then return t.CurrentDNA end
+	if type(t.EquippedDNA) == "string" and DNAs[t.EquippedDNA] then return t.EquippedDNA end
+	if type(t.Best_DNA_Index) == "number" then
+		local n = DNAsOrder[t.Best_DNA_Index]
+		if n then return n end
+	end
+	-- Any key with "dna" in its name whose value is a DNA name
+	for k, v in pairs(t) do
+		if type(k) == "string" and string.find(string.lower(k), "dna") and type(v) == "string" and DNAs[v] then return v end
+	end
+	-- Last resort: any string value that is a DNA name
+	for _, v in pairs(t) do
+		if type(v) == "string" and DNAs[v] then return v end
+	end
+	return nil
+end
+
 local function getCurrentDNA()
-	if clientData then return clientData.DNA or clientData.CurrentDNA or clientData.EquippedDNA end
+	if currentDNAOverride then return currentDNAOverride end
+	if clientData then
+		local d = findDNAInTable(clientData)
+		if d then return d end
+		if type(clientData.Data) == "table" then
+			local d2 = findDNAInTable(clientData.Data)
+			if d2 then return d2 end
+		end
+	end
 	return nil
 end
 
@@ -500,7 +550,7 @@ local function tryBuyDNA()
 			if dnaCursor < 2 or dnaCursor > #DNAsOrder then dnaCursor = 2 end
 			local last = math.min(dnaCursor + 19, #DNAsOrder)
 			print("[AutoFarm] DNA check: current unknown - trying DNAs " .. dnaCursor .. "-" .. last .. " of " .. #DNAsOrder)
-			updateDNAInfo("Current DNA unknown - trying DNAs " .. dnaCursor .. "-" .. last .. " | Coins: " .. tostring(coinsIM))
+			updateDNAInfo("Current DNA unknown - trying DNAs " .. dnaCursor .. "-" .. last .. " | Coins: " .. tostring(coinsIM) .. (clientDataKeys ~= "" and " | Data keys: " .. string.sub(clientDataKeys, 1, 120) or ""))
 			for i = dnaCursor, last do
 				if unloaded then break end
 				local name = DNAsOrder[i]
@@ -600,6 +650,26 @@ MainTab:CreateToggle({
 	end,
 })
 
+-- If the script can't detect your current DNA on its own, type it here once
+-- (exact name, e.g. Pattern DNA) and it will buy the NEXT DNA after it.
+pcall(function()
+	MainTab:CreateInput({
+		Name = "My current DNA",
+		PlaceholderText = "e.g. Pattern DNA",
+		RemoveTextAfterFocusLost = false,
+		Callback = function(text)
+			if text and text ~= "" and DNAs[text] then
+				currentDNAOverride = text
+				local idx = indexOfDNA(text)
+				local nxt = DNAsOrder[idx + 1]
+				updateDNAInfo("Current DNA set to: " .. text .. (nxt and " - next: " .. nxt .. " (" .. tostring(DNAs[nxt].Price) .. " Coins)" or " - you have the last DNA"))
+			elseif text and text ~= "" then
+				updateDNAInfo("Unknown DNA name: '" .. text .. "' - check the exact spelling")
+			end
+		end,
+	})
+end)
+
 MainTab:CreateSlider({
 	Name = "Swing Delay (seconds)",
 	Range = { 0.1, 1 },
@@ -697,4 +767,4 @@ end)
 if useRayfield then
 	pcall(function() Rayfield:Notify({ Title = "Saber Auto-Farm", Content = "Loaded. Turn on Auto-Farm in the Main tab.", Duration = 5 }) end)
 end
-print("[AutoFarm] Loaded v12 (Rayfield + Auto-Buy DNA batch fix" .. (useRayfield and "" or " FAILED - simple GUI") .. " + InfiniteMath Coins fix). Minimize: Rayfield top-bar button. Unload: button in Main tab.")
+print("[AutoFarm] Loaded v13 (Rayfield + DNA auto-detect + manual current DNA box" .. (useRayfield and "" or " FAILED - simple GUI") .. " + InfiniteMath Coins fix). Minimize: Rayfield top-bar button. Unload: button in Main tab.")
