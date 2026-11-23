@@ -1,4 +1,4 @@
--- Saber Simulator - Auto-Swing + Auto-Sell + Auto-Buy Saber + Auto-Buy DNA (MAIN script, v14 - Rayfield)
+-- Saber Simulator - Auto-Swing + Auto-Sell + Auto-Buy Saber + Auto-Buy DNA (MAIN script, v15 - Rayfield)
 -- v7: GUI switched to Rayfield (Sirius) - https://docs.sirius.menu/rayfield/
 --   local Rayfield = loadstring(game:HttpGet('https://sirius.menu/rayfield'))()
 --   Rayfield is the most-used UI on mobile executors, with a built-in
@@ -96,7 +96,7 @@ local lastSell = tick()
 -- still loads and works. No more silent "not loading".
 print("[AutoFarm] Starting... loading Rayfield...")
 local useRayfield = false
-local Rayfield, Window, MainTab, statusPara, buyPara, dnaPara
+local Rayfield, Window, MainTab, statusPara, buyPara, dnaPara, ownedPara
 local rayOk, rayResult = pcall(function()
 	return loadstring(game:HttpGet("https://sirius.menu/rayfield"))()
 end)
@@ -117,6 +117,7 @@ if rayOk and rayResult then
 		print("[AutoFarm] Rayfield loaded OK")
 		MainTab = Window:CreateTab("Main", nil)
 		statusPara = MainTab:CreateParagraph({ Title = "Status", Content = "Stopped | Swings: 0" })
+		ownedPara = MainTab:CreateParagraph({ Title = "Owned", Content = "Saber: ? | DNA: ? - press 'Show My Saber & DNA' to refresh" })
 		buyPara = MainTab:CreateParagraph({ Title = "Buy", Content = "Auto-Buy: ON - waiting for first check (every 5s while running)" })
 		dnaPara = MainTab:CreateParagraph({ Title = "DNA", Content = "Auto-Buy DNA: OFF - turn it on in the Main tab" })
 	else
@@ -232,6 +233,14 @@ local function updateDNAInfo(text)
 	end
 end
 
+-- v15: shows what saber + DNA you own, on screen. The game only sends your
+-- CURRENT saber (data.Saber / Best_Saber_Index) and CURRENT DNA (data.DNA) -
+-- there is no full list of everything you own in the data - so this shows
+-- those two, plus Coins. Forward-declared here, assigned after
+-- getCurrentSaber/getCurrentDNA exist below (Lua can only see locals
+-- declared before the function, so the body lives down there).
+local updateOwnedInfo
+
 local autoFarmToggle = nil -- created in the controls section below (Rayfield only)
 
 local function unload()
@@ -328,6 +337,7 @@ pcall(function()
 			updateDNAInfo("Bought DNA confirmed: " .. data.DNA)
 			lastBuyDNATarget = nil
 		end
+		if updateOwnedInfo then pcall(updateOwnedInfo) end
 	end)
 	Events.RequestClientData:FireServer()
 end)
@@ -536,6 +546,33 @@ local function getCurrentDNA()
 	return nil
 end
 
+-- v15: the Owned display. Shows your current saber (+ click power and best
+-- index) and current DNA (+ storage) and Coins, on screen.
+updateOwnedInfo = function()
+	local saber = getCurrentSaber()
+	local saberText = saber or "?"
+	if saber and Swords[saber] then
+		saberText = saber .. " (" .. tostring(Swords[saber].AmountPerClick) .. " per click)"
+		if clientData and clientData.Best_Saber_Index then
+			saberText = saberText .. " | Best index: " .. tostring(clientData.Best_Saber_Index)
+		end
+	end
+	local dna = getCurrentDNA()
+	local dnaText = dna or "?"
+	if dna and DNAs[dna] then
+		dnaText = dna .. " (" .. tostring(DNAs[dna].MaxStorage) .. " storage)"
+	end
+	local coinsIM = getCoinsIM()
+	local text = "Saber: " .. saberText .. " | DNA: " .. dnaText .. " | Coins: " .. (coinsIM and tostring(coinsIM) or "?")
+	if useRayfield and ownedPara then
+		pcall(function() ownedPara:Set({ Title = "Owned", Content = text }) end)
+		pcall(function() ownedPara:SetTitle(text) end)
+	elseif simpleStatus then
+		pcall(function() simpleStatus.Text = text end)
+	end
+	return text
+end
+
 local dnaAttempts = 0
 local function tryBuyDNA()
 	if not AUTO_BUY_DNA or unloaded then return end
@@ -720,6 +757,20 @@ MainTab:CreateSlider({
 })
 
 MainTab:CreateButton({
+	Name = "Show My Saber & DNA",
+	Callback = function()
+		pcall(function() Events.RequestClientData:FireServer() end)
+		task.spawn(function()
+			task.wait(1)
+			local text = "Saber: ? | DNA: ?"
+			if updateOwnedInfo then text = updateOwnedInfo() or text end
+			print("[AutoFarm] Owned: " .. text)
+			if useRayfield then pcall(function() Rayfield:Notify({ Title = "Owned", Content = text, Duration = 6 }) end) end
+		end)
+	end,
+})
+
+MainTab:CreateButton({
 	Name = "Buy Best Saber Now",
 	Callback = function() tryBuySaber() end,
 })
@@ -756,6 +807,7 @@ task.spawn(function()
 				local ok2, err2 = pcall(tryBuyDNA)
 				if not ok2 then warn("[AutoFarm] Buy DNA error: " .. tostring(err2)) end
 			end
+			if updateOwnedInfo then pcall(updateOwnedInfo) end
 		end
 	end
 end)
@@ -789,4 +841,4 @@ end)
 if useRayfield then
 	pcall(function() Rayfield:Notify({ Title = "Saber Auto-Farm", Content = "Loaded. Turn on Auto-Farm in the Main tab.", Duration = 5 }) end)
 end
-print("[AutoFarm] Loaded v14 (Rayfield + DNA affordable-only batch" .. (useRayfield and "" or " FAILED - simple GUI") .. " + InfiniteMath Coins fix). Minimize: Rayfield top-bar button. Unload: button in Main tab.")
+print("[AutoFarm] Loaded v15 (Rayfield + Owned saber/DNA display" .. (useRayfield and "" or " FAILED - simple GUI") .. " + InfiniteMath Coins fix). Minimize: Rayfield top-bar button. Unload: button in Main tab.")
