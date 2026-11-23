@@ -1,8 +1,16 @@
--- Buy Best Saber ONLY (standalone, Saber Simulator)
--- Every 5s: buy the best saber you can afford that is better than your current one.
--- Uses: ReplicatedStorage/Modules/ItemInfo (Swords_Order sorted by AmountPerClick, VIP excluded)
---        ReplicatedStorage/Events/UIAction ("BuyWeapon", saberName) - CONFIRMED by RemoteSpy: ("BuyWeapon", "Daze")
--- Run in Dex Console / executor. Stop it by re-executing / closing the game.
+-- Buy Best Saber ONLY (standalone, Saber Simulator) - v4 FIXED
+-- Why v3 didn't buy: it SKIPPED buying entirely when it couldn't read your
+-- Coins ("Coins unknown, skipping"). v4 never skips for that reason.
+-- Instead, if Coins can't be read, it tries the next sabers in order -
+-- the server itself rejects the ones you can't afford.
+--
+-- Confirmed by RemoteSpy:
+--   game:GetService("ReplicatedStorage").Events.UIAction:FireServer("BuyWeapon", "Daze")
+-- So buying is UIAction("BuyWeapon", saberName).
+--
+-- Run in Dex Console / executor. Watch the console output - it prints
+-- exactly what it is doing every 5 seconds. Paste that output back if it
+-- still doesn't buy.
 
 local RS = game:GetService("ReplicatedStorage")
 local Players = game:GetService("Players")
@@ -26,31 +34,57 @@ local function getCoins()
 	return nil
 end
 
-local currentGain = 0
+local function getCurrentSaber()
+	if clientData then return clientData.Saber or clientData.CurrentSaber or clientData.EquippedSaber end
+	return nil
+end
+
+-- How many sabers to try per check in fallback mode (cheapest first)
+local TRY_COUNT = 10
+
 while true do
 	task.wait(5)
 	local coins = getCoins()
-	if not coins then print("[BuyBest] Coins unknown, skipping") continue end
+	local current = getCurrentSaber()
+	local currentGain = (current and Swords[current] and Swords[current].AmountPerClick) or 0
+	print("[BuyBest] Coins=" .. tostring(coins) .. " current=" .. tostring(current) .. " currentGain=" .. tostring(currentGain))
 
-	-- Sync current saber from server data when available
-	if clientData and clientData.Saber and Swords[clientData.Saber] then
-		currentGain = Swords[clientData.Saber].AmountPerClick
-	end
-
-	-- Best affordable saber better than current (Order is ascending, so last match wins)
-	local best
-	for _, name in ipairs(Order) do
-		local s = Swords[name]
-		if s and s.AmountPerClick > currentGain and coins >= tonumber(s.Price) then
-			best = name
+	if coins then
+		-- Best affordable saber better than current
+		local best
+		for _, name in ipairs(Order) do
+			local s = Swords[name]
+			if s and s.AmountPerClick > currentGain and coins >= tonumber(s.Price) then
+				best = name
+			end
 		end
-	end
-
-	if best then
-		print("[BuyBest] Coins=" .. coins .. " buying " .. best .. " (price " .. Swords[best].Price .. ")")
-		pcall(function() UIAction:FireServer("BuyWeapon", best) end)
-		currentGain = Swords[best].AmountPerClick -- assume bought, so next loop picks the next one up
+		if best then
+			print("[BuyBest] Buying best: " .. best .. " price=" .. tostring(Swords[best].Price))
+			local args = { "BuyWeapon", best }
+			pcall(function() UIAction:FireServer(unpack(args)) end)
+			-- Assume it worked so next loop looks for the next one up.
+			-- If UpdateClientData says otherwise, it will correct currentGain above.
+			currentGain = Swords[best].AmountPerClick
+		else
+			print("[BuyBest] No upgrade affordable yet")
+		end
 	else
-		print("[BuyBest] No upgrade affordable. Coins=" .. coins)
+		-- Coins UNKNOWN - don't skip. Try the next TRY_COUNT sabers in order,
+		-- cheapest first. Server rejects unaffordable ones, buys affordable ones.
+		-- This also handles games that require buying in order.
+		local startIdx = 1
+		if current then
+			for i, name in ipairs(Order) do
+				if name == current then startIdx = i + 1 break end
+			end
+		end
+		print("[BuyBest] Coins unknown - trying next " .. TRY_COUNT .. " sabers from index " .. startIdx)
+		for i = startIdx, math.min(startIdx + TRY_COUNT - 1, #Order) do
+			local name = Order[i]
+			print("[BuyBest] Trying: " .. name .. " price=" .. tostring(Swords[name].Price))
+			local args = { "BuyWeapon", name }
+			pcall(function() UIAction:FireServer(unpack(args)) end)
+			task.wait(0.3)
+		end
 	end
 end
