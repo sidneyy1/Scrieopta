@@ -205,16 +205,17 @@ local function getCurrentSaber()
 end
 
 local function tryBuySaber()
-	if not AUTO_BUY then return end
+	if not AUTO_BUY or unloaded then return end
 	local coins = getCoins()
 	local current = getCurrentSaber()
 	-- Sync assumedIndex from the real current saber when we know it
 	if current then assumedIndex = indexOfSaber(current) + 1 end
 	local currentGain = (current and Swords[current] and Swords[current].AmountPerClick) or 0
+	print("[AutoFarm] Buy check: Coins=" .. tostring(coins) .. " current=" .. tostring(current))
 
-	local target = nil
 	if coins then
-		-- Best affordable saber BETTER than current - this is the "best saber" fix
+		-- Best affordable saber BETTER than current
+		local target = nil
 		for _, name in ipairs(SwordsOrder) do
 			local info = Swords[name]
 			local price = info and tonumber(info.Price)
@@ -222,22 +223,32 @@ local function tryBuySaber()
 				if not target or info.AmountPerClick > Swords[target].AmountPerClick then target = name end
 			end
 		end
+		if not target then
+			print("[AutoFarm] Buy check: no affordable upgrade yet")
+			return
+		end
+		print("[AutoFarm] Buying best: " .. target .. " price=" .. tostring(Swords[target].Price))
+		lastBuyTarget = target
+		lastBuyCoinsBefore = coins
+		local args = { BUY_ACTION, target }
+		pcall(function() UIAction:FireServer(unpack(args)) end)
+		-- Assume it worked so next check looks higher; UpdateClientData will correct us if not
+		currentGain = Swords[target].AmountPerClick
 	else
-		-- Coins unknown: try the next saber in order, one at a time.
-		-- Do NOT advance here - only the UpdateClientData hook above advances
-		-- us when a buy is confirmed. Advancing blindly was the v2 bug.
-		target = SwordsOrder[assumedIndex]
+		-- Coins UNKNOWN - don't skip. Try the next 10 sabers in order, cheapest first.
+		-- Server rejects unaffordable ones, buys affordable ones. This also
+		-- handles games that require buying in order.
+		print("[AutoFarm] Buy check: Coins unknown - trying next 10 from index " .. assumedIndex)
+		for i = assumedIndex, math.min(assumedIndex + 9, #SwordsOrder) do
+			if unloaded then break end
+			local name = SwordsOrder[i]
+			print("[AutoFarm] Trying: " .. name .. " price=" .. tostring(Swords[name].Price))
+			lastBuyTarget = name
+			local args = { BUY_ACTION, name }
+			pcall(function() UIAction:FireServer(unpack(args)) end)
+			task.wait(0.3)
+		end
 	end
-
-	if not target then
-		print("[AutoFarm] Buy check: no affordable upgrade. Coins=" .. tostring(coins) .. " current=" .. tostring(current))
-		return
-	end
-	local price = Swords[target] and Swords[target].Price
-	print("[AutoFarm] Buy check: Coins=" .. tostring(coins) .. " current=" .. tostring(current) .. " trying=" .. target .. " price=" .. tostring(price))
-	lastBuyTarget = target
-	lastBuyCoinsBefore = coins
-	pcall(function() UIAction:FireServer(BUY_ACTION, target) end)
 end
 
 task.spawn(function()
