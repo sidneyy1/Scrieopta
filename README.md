@@ -22,6 +22,12 @@ Direct loadstring (no router):
 loadstring(game:HttpGet("https://raw.githubusercontent.com/sidneyy1/Scrieopta/main/Throw%20Food%20For%20Animals/throw_food_auto.lua"))()
 ```
 
+Remote probe (tests which server remotes accept forged values, results on screen):
+
+```lua
+loadstring(game:HttpGet("https://raw.githubusercontent.com/sidneyy1/Scrieopta/main/Throw%20Food%20For%20Animals/probe_food_remotes.lua"))()
+```
+
 Direct loadstring (no router):
 
 ```lua
