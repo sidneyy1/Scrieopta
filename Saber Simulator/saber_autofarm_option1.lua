@@ -1,4 +1,8 @@
--- Saber Simulator - Auto-Swing + Auto-Sell + Auto-Buy Saber (MAIN script, v6.1 - WindUI + fallback)
+-- Saber Simulator - Auto-Swing + Auto-Sell + Auto-Buy Saber (MAIN script, v6.2 - WindUI + fallback)
+-- v6.2: a "Loading..." label appears on screen the INSTANT the file runs,
+-- before anything else (before WaitForChild, before WindUI). If you don't
+-- even see that label, the loadstring itself never ran / GitHub served a
+-- cached copy - try again in a few minutes or rejoin first.
 -- GUI: WindUI by Footagesus - https://github.com/Footagesus/WindUI
 --   local WindUI = loadstring(game:HttpGet("https://raw.githubusercontent.com/Footagesus/WindUI/main/dist/main.lua"))()
 --   Minimize/reopen: RightShift (WindUI toggle key) or the floating Open button | Unload: "Unload Script" button in the Main tab
@@ -26,12 +30,46 @@
 --   So the buy action is "BuyWeapon" with the saber name as arg 2.
 --   * Cooldown / server rate-limit is UNKNOWN (server-side, not in the export).
 
+-- Loading indicator FIRST - before any WaitForChild / HttpGet that could hang
+print("[AutoFarm] Script file loaded - starting...")
+local _loadingGui = Instance.new("ScreenGui")
+_loadingGui.Name = "SaberAutoFarmLoading"
+_loadingGui.ResetOnSpawn = false
+_loadingGui.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
+local _loadingLabel = Instance.new("TextLabel")
+_loadingLabel.Size = UDim2.new(0, 260, 0, 40)
+_loadingLabel.Position = UDim2.new(0.5, -130, 0, 20)
+_loadingLabel.BackgroundColor3 = Color3.fromRGB(30, 30, 30)
+_loadingLabel.TextColor3 = Color3.fromRGB(255, 255, 255)
+_loadingLabel.TextSize = 16
+_loadingLabel.Font = Enum.Font.SourceSansBold
+_loadingLabel.Text = "Saber Auto-Farm loading..."
+_loadingLabel.Parent = _loadingGui
+pcall(function() _loadingGui.Parent = game:GetService("CoreGui") end)
+if not _loadingGui.Parent then
+	pcall(function() _loadingGui.Parent = game:GetService("Players").LocalPlayer:WaitForChild("PlayerGui") end)
+end
+
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local Players = game:GetService("Players")
-local Events = ReplicatedStorage:WaitForChild("Events")
-local SwingSaber = Events:WaitForChild("SwingSaber")
-local SellStrength = Events:WaitForChild("SellStrength")
-local UIAction = Events:WaitForChild("UIAction")
+-- WaitForChild with a 10s timeout each - the old code waited FOREVER here,
+-- so if Events didn't exist the script hung silently with nothing on screen.
+local Events = ReplicatedStorage:WaitForChild("Events", 10)
+if not Events then
+	_loadingLabel.Text = "ERROR: no Events in ReplicatedStorage - wrong game?"
+	warn("[AutoFarm] ERROR: ReplicatedStorage.Events not found after 10s - are you in Saber Simulator?")
+	return
+end
+print("[AutoFarm] Events found")
+local SwingSaber = Events:WaitForChild("SwingSaber", 10)
+local SellStrength = Events:WaitForChild("SellStrength", 10)
+local UIAction = Events:WaitForChild("UIAction", 10)
+if not (SwingSaber and SellStrength and UIAction) then
+	_loadingLabel.Text = "ERROR: missing SwingSaber / SellStrength / UIAction"
+	warn("[AutoFarm] ERROR: a remote is missing - SwingSaber=" .. tostring(SwingSaber) .. " SellStrength=" .. tostring(SellStrength) .. " UIAction=" .. tostring(UIAction))
+	return
+end
+print("[AutoFarm] Remotes found")
 
 -- ===== SETTINGS =====
 local SWING_DELAY = 0.25
@@ -461,7 +499,8 @@ task.spawn(function()
 	end
 end)
 
+pcall(function() _loadingGui:Destroy() end)
 if useWindUI then
 	pcall(function() WindUI:Notify({ Title = "Saber Auto-Farm", Content = "Loaded. Turn on Auto-Farm in the Main tab.", Icon = "check" }) end)
 end
-print("[AutoFarm] Loaded v6.1 (WindUI" .. (useWindUI and "" or " FAILED - simple GUI") .. " + InfiniteMath Coins fix). Minimize: RightShift or the floating Open button. Unload: button in Main tab.")
+print("[AutoFarm] Loaded v6.2 (WindUI" .. (useWindUI and "" or " FAILED - simple GUI") .. " + InfiniteMath Coins fix). Minimize: RightShift or the floating Open button. Unload: button in Main tab.")
