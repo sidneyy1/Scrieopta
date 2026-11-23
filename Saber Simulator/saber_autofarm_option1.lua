@@ -1,13 +1,14 @@
--- Saber Simulator - Auto-Swing + Auto-Sell + Auto-Buy Saber (MAIN script, v6.3 - WindUI + fallback)
--- v6.3 (mobile): the user is on MOBILE and can't see the console, so ALL
--- diagnostics are now ON-SCREEN, not console-only. The loading label stays
--- up for 5 seconds saying WindUI OK / WindUI failed, and the simple GUI's
+-- Saber Simulator - Auto-Swing + Auto-Sell + Auto-Buy Saber (MAIN script, v7 - Rayfield)
+-- v7: GUI switched to Rayfield (Sirius) - https://docs.sirius.menu/rayfield/
+--   local Rayfield = loadstring(game:HttpGet('https://sirius.menu/rayfield'))()
+--   Rayfield is the most-used UI on mobile executors, with a built-in
+--   minimize button in the top bar. Unload: "Unload Script" button in Main tab.
+-- Mobile: the user is on MOBILE and can't see the console, so ALL
+-- diagnostics are ON-SCREEN, not console-only. The loading label stays
+-- up for 5 seconds saying Rayfield OK / Rayfield failed, and the simple GUI's
 -- status line shows Coins / current saber / last buy, so buying can be
 -- checked without opening a console. No keyboard needed on mobile:
 -- use the on-screen toggle/button, not F or RightShift.
--- GUI: WindUI by Footagesus - https://github.com/Footagesus/WindUI
---   local WindUI = loadstring(game:HttpGet("https://raw.githubusercontent.com/Footagesus/WindUI/main/dist/main.lua"))()
---   Minimize/reopen: RightShift (WindUI toggle key) or the floating Open button | Unload: "Unload Script" button in the Main tab
 -- Based ONLY on ReplicatedStorage export (Saber.zip)
 --   ReplicatedStorage/Events/SwingSaber   -> gains Strength
 --   ReplicatedStorage/Events/SellStrength -> converts Strength to Coins
@@ -87,55 +88,44 @@ local unloaded = false -- set to true by the Unload button, all loops check this
 local swingCount = 0
 local lastSell = tick()
 
--- ===== WINDUI GUI (with fallback) =====
--- v6 broke loading because WindUI was loaded with NO error handling:
--- if that one loadstring failed (slow / blocked / executor missing a
--- function WindUI needs), the whole script died before anything appeared.
--- v6.1 fixes it: WindUI is loaded in pcall, the script prints what happened,
--- and if WindUI fails it falls back to a simple built-in GUI so the farm
+-- ===== RAYFIELD GUI (with fallback) =====
+-- Rayfield is loaded in pcall: if that one loadstring fails, the script
+-- prints what happened and falls back to a simple built-in GUI so the farm
 -- still loads and works. No more silent "not loading".
-print("[AutoFarm] Starting... loading WindUI...")
-local useWindUI = false
-local WindUI, Window, MainTab, statusPara, buyPara
-local windOk, windResult = pcall(function()
-	return loadstring(game:HttpGet("https://raw.githubusercontent.com/Footagesus/WindUI/main/dist/main.lua"))()
+print("[AutoFarm] Starting... loading Rayfield...")
+local useRayfield = false
+local Rayfield, Window, MainTab, statusPara, buyPara
+local rayOk, rayResult = pcall(function()
+	return loadstring(game:HttpGet("https://sirius.menu/rayfield"))()
 end)
-if windOk and windResult then
-	WindUI = windResult
+if rayOk and rayResult then
+	Rayfield = rayResult
 	local winOk, winResult = pcall(function()
-		return WindUI:CreateWindow({
-			Title = "Saber Simulator",
-			Folder = "SaberAutoFarm",
-			Icon = "swords",
-			NewElements = true,
-			OpenButton = {
-				Title = "Open Saber UI",
-				Enabled = true, -- floating button to reopen after minimizing
-				Draggable = true,
-			},
-			Topbar = {
-				ButtonsType = "Mac", -- minimize / close buttons in the top bar
-			},
+		return Rayfield:CreateWindow({
+			Name = "Saber Simulator | Auto-Farm",
+			LoadingTitle = "Saber Simulator",
+			LoadingSubtitle = "Auto-Farm",
+			ConfigurationSaving = { Enabled = false },
+			KeySystem = false,
 		})
 	end)
 	if winOk and winResult then
 		Window = winResult
-		useWindUI = true
-		print("[AutoFarm] WindUI loaded OK")
-		pcall(function() Window:SetToggleKey(Enum.KeyCode.RightShift) end) -- RightShift = minimize / reopen
-		MainTab = Window:Tab({ Title = "Main", Icon = "swords" })
-		statusPara = MainTab:Paragraph({ Title = "Status", Desc = "Stopped | Swings: 0" })
-		buyPara = MainTab:Paragraph({ Title = "Buy", Desc = "Auto-Buy: ON - waiting for first check (every 5s while running)" })
+		useRayfield = true
+		print("[AutoFarm] Rayfield loaded OK")
+		MainTab = Window:CreateTab("Main", nil)
+		statusPara = MainTab:CreateParagraph({ Title = "Status", Content = "Stopped | Swings: 0" })
+		buyPara = MainTab:CreateParagraph({ Title = "Buy", Content = "Auto-Buy: ON - waiting for first check (every 5s while running)" })
 	else
-		print("[AutoFarm] WindUI window failed: " .. tostring(winResult) .. " - using simple GUI instead")
+		print("[AutoFarm] Rayfield window failed: " .. tostring(winResult) .. " - using simple GUI instead")
 	end
 else
-	print("[AutoFarm] WindUI load failed: " .. tostring(windResult) .. " - using simple GUI instead")
+	print("[AutoFarm] Rayfield load failed: " .. tostring(rayResult) .. " - using simple GUI instead")
 end
 
--- Simple fallback GUI (used only if WindUI fails - same START / X / minimize as v5)
+-- Simple fallback GUI (used only if Rayfield fails - same START / X / minimize as v5)
 local simpleGui, simpleButton, simpleStatus, simpleFrame, simpleMiniBtn
-if not useWindUI then
+if not useRayfield then
 	simpleGui = Instance.new("ScreenGui")
 	simpleGui.Name = "SaberAutoFarm"
 	simpleGui.ResetOnSpawn = false
@@ -209,19 +199,21 @@ if not useWindUI then
 	-- closeBtn / simpleButton are wired below, after unload() / setRunning() exist
 end
 
--- Paragraph update methods vary by WindUI version, so try each in pcall
+-- Paragraph update methods vary by Rayfield version, so try each in pcall
 -- and fall back to the console print (status is always printed there too).
+-- Rayfield paragraph: Set({Title=..., Content=...}) - try that first,
+-- then other spellings, all in pcall so a missing method never breaks the farm.
 local function updateStatus(text)
-	if useWindUI and statusPara then
-		pcall(function() statusPara:SetDesc(text) end)
+	if useRayfield and statusPara then
+		pcall(function() statusPara:Set({ Title = "Status", Content = text }) end)
 		pcall(function() statusPara:SetTitle(text) end)
 	elseif simpleStatus then
 		pcall(function() simpleStatus.Text = text end)
 	end
 end
 local function updateBuyInfo(text)
-	if useWindUI and buyPara then
-		pcall(function() buyPara:SetDesc(text) end)
+	if useRayfield and buyPara then
+		pcall(function() buyPara:Set({ Title = "Buy", Content = text }) end)
 		pcall(function() buyPara:SetTitle(text) end)
 	elseif simpleStatus then
 		-- Mobile: show buy info on the simple GUI itself, no console needed
@@ -229,14 +221,14 @@ local function updateBuyInfo(text)
 	end
 end
 
-local autoFarmToggle = nil -- created in the controls section below (WindUI only)
+local autoFarmToggle = nil -- created in the controls section below (Rayfield only)
 
 local function unload()
 	if unloaded then return end
 	unloaded = true
 	running = false
 	print("[AutoFarm] Unloaded - all loops stopped, GUI removed. Re-run the loadstring to start again.")
-	if useWindUI and Window then pcall(function() Window:Destroy() end) end
+	if useRayfield and Rayfield then pcall(function() Rayfield:Destroy() end) end
 	if simpleGui then pcall(function() simpleGui:Destroy() end) end
 end
 
@@ -404,7 +396,7 @@ local function tryBuySaber()
 		end
 		print("[AutoFarm] Buying best: " .. target .. " price=" .. tostring(Swords[target].Price))
 		updateBuyInfo("Buying: " .. target .. " | Price: " .. tostring(Swords[target].Price))
-		if useWindUI then pcall(function() WindUI:Notify({ Title = "Auto-Buy", Content = "Buying " .. target, Icon = "check" }) end) end
+		if useRayfield then pcall(function() Rayfield:Notify({ Title = "Auto-Buy", Content = "Buying " .. target, Duration = 3 }) end) end
 		lastBuyTarget = target
 		local args = { BUY_ACTION, target }
 		pcall(function() UIAction:FireServer(unpack(args)) end)
@@ -431,54 +423,62 @@ local function tryBuySaber()
 	end
 end
 
--- ===== WINDUI CONTROLS (Main tab) - skipped if WindUI failed, simple GUI is already wired above =====
-if useWindUI then
-autoFarmToggle = MainTab:Toggle({
-	Title = "Auto-Farm (Swing + Sell)",
-	Value = false,
+-- ===== RAYFIELD CONTROLS (Main tab) - skipped if Rayfield failed, simple GUI is already wired above =====
+if useRayfield then
+autoFarmToggle = MainTab:CreateToggle({
+	Name = "Auto-Farm (Swing + Sell)",
+	CurrentValue = false,
+	Flag = "AutoFarmToggle",
 	Callback = function(state) setRunning(state) end,
 })
 
-MainTab:Toggle({
-	Title = "Auto-Buy Best Saber",
-	Value = true,
+MainTab:CreateToggle({
+	Name = "Auto-Buy Best Saber",
+	CurrentValue = true,
+	Flag = "AutoBuyToggle",
 	Callback = function(state)
 		AUTO_BUY = state
 		updateBuyInfo(AUTO_BUY and "Auto-Buy: ON" or "Auto-Buy: OFF")
 	end,
 })
 
-MainTab:Slider({
-	Title = "Swing Delay (seconds)",
-	Step = 0.05,
-	Value = { Min = 0.1, Max = 1, Default = 0.25 },
+MainTab:CreateSlider({
+	Name = "Swing Delay (seconds)",
+	Range = { 0.1, 1 },
+	Increment = 0.05,
+	CurrentValue = 0.25,
+	Flag = "SwingDelay",
 	Callback = function(value) SWING_DELAY = value end,
 })
 
-MainTab:Slider({
-	Title = "Sell Every (swings)",
-	Step = 1,
-	Value = { Min = 10, Max = 200, Default = 50 },
+MainTab:CreateSlider({
+	Name = "Sell Every (swings)",
+	Range = { 10, 200 },
+	Increment = 1,
+	CurrentValue = 50,
+	Flag = "SellEverySwings",
 	Callback = function(value) SELL_EVERY_SWINGS = value end,
 })
 
-MainTab:Slider({
-	Title = "Buy Check (seconds)",
-	Step = 1,
-	Value = { Min = 2, Max = 30, Default = 5 },
+MainTab:CreateSlider({
+	Name = "Buy Check (seconds)",
+	Range = { 2, 30 },
+	Increment = 1,
+	CurrentValue = 5,
+	Flag = "BuyCheckEvery",
 	Callback = function(value) BUY_CHECK_EVERY = value end,
 })
 
-MainTab:Button({
-	Title = "Buy Best Saber Now",
+MainTab:CreateButton({
+	Name = "Buy Best Saber Now",
 	Callback = function() tryBuySaber() end,
 })
 
-MainTab:Button({
-	Title = "Unload Script",
+MainTab:CreateButton({
+	Name = "Unload Script",
 	Callback = function() unload() end,
 })
-end -- if useWindUI
+end -- if useRayfield
 
 task.spawn(function()
 	while not unloaded do
@@ -508,13 +508,13 @@ end)
 -- Mobile: keep the loading label on screen for 5s with the result,
 -- so it can be read without a console, then remove it.
 pcall(function()
-	_loadingLabel.Text = useWindUI and "WindUI loaded OK - turn on Auto-Farm" or "WindUI failed - simple GUI loaded"
+	_loadingLabel.Text = useRayfield and "Rayfield loaded OK - turn on Auto-Farm" or "Rayfield failed - simple GUI loaded"
 end)
 task.spawn(function()
 	task.wait(5)
 	pcall(function() _loadingGui:Destroy() end)
 end)
-if useWindUI then
-	pcall(function() WindUI:Notify({ Title = "Saber Auto-Farm", Content = "Loaded. Turn on Auto-Farm in the Main tab.", Icon = "check" }) end)
+if useRayfield then
+	pcall(function() Rayfield:Notify({ Title = "Saber Auto-Farm", Content = "Loaded. Turn on Auto-Farm in the Main tab.", Duration = 5 }) end)
 end
-print("[AutoFarm] Loaded v6.3 (WindUI" .. (useWindUI and "" or " FAILED - simple GUI") .. " + InfiniteMath Coins fix). Minimize: RightShift or the floating Open button. Unload: button in Main tab.")
+print("[AutoFarm] Loaded v7 (Rayfield" .. (useRayfield and "" or " FAILED - simple GUI") .. " + InfiniteMath Coins fix). Minimize: Rayfield top-bar button. Unload: button in Main tab.")
