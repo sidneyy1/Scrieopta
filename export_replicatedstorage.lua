@@ -1,6 +1,6 @@
 -- Export game structure from Dex Console / executor (v2)
 -- Run this in Dex > Console. It exports these into your executor's
--- workspace folder, under Saber_Export/:
+-- workspace folder, under a folder named after the game (e.g. SaberSimulator/):
 --   ReplicatedStorage, StarterGui, StarterPlayerScripts, StarterCharacterScripts,
 --   PlayerGui (your live UI), Workspace
 -- For each one you get:
@@ -16,7 +16,23 @@
 local HttpService = game:GetService("HttpService")
 local Players = game:GetService("Players")
 
-pcall(makefolder, "Saber_Export")
+-- Folder named after the game, e.g. "Saber Simulator" -> "SaberSimulator".
+-- MarketplaceService gives the real game name; falls back to game.Name.
+local OUT = "Game_Export"
+do
+	local name = nil
+	pcall(function()
+		name = game:GetService("MarketplaceService"):GetProductInfo(game.PlaceId).Name
+	end)
+	if not name or name == "" then name = game.Name end
+	if name and name ~= "" then
+		local clean = name:gsub("%s+", ""):gsub("[^%w%_%-]", "")
+		if clean ~= "" then OUT = clean end
+	end
+end
+print("[Export] Game: " .. OUT)
+
+pcall(makefolder, OUT)
 
 local function safeName(s)
 	return (s:gsub("[^%w%_%-]", "_"))
@@ -85,23 +101,23 @@ local function exportService(root, label, outFolder, maxNodes, maxDepth)
 end
 
 -- 1. ReplicatedStorage (same as before: prices, formulas, remotes)
-exportService(game:GetService("ReplicatedStorage"), "ReplicatedStorage", "Saber_Export", 30000, 12)
+exportService(game:GetService("ReplicatedStorage"), "ReplicatedStorage", OUT, 30000, 12)
 
 -- 2. StarterGui (the game's UI templates - DNA shop buttons, equipped displays)
-exportService(game:GetService("StarterGui"), "StarterGui", "Saber_Export", 30000, 12)
+exportService(game:GetService("StarterGui"), "StarterGui", OUT, 30000, 12)
 
 -- 3. StarterPlayerScripts / StarterCharacterScripts (how the game calls remotes)
 local sp = game:GetService("StarterPlayer")
 local sps = sp:FindFirstChild("StarterPlayerScripts")
-if sps then exportService(sps, "StarterPlayerScripts", "Saber_Export", 10000, 12) end
+if sps then exportService(sps, "StarterPlayerScripts", OUT, 10000, 12) end
 local scs = sp:FindFirstChild("StarterCharacterScripts")
-if scs then exportService(scs, "StarterCharacterScripts", "Saber_Export", 10000, 12) end
+if scs then exportService(scs, "StarterCharacterScripts", OUT, 10000, 12) end
 
 -- 4. PlayerGui (your LIVE UI - what the DNA display actually looks like right now)
 local lp = Players.LocalPlayer
 if lp then
 	local pg = lp:FindFirstChild("PlayerGui")
-	if pg then exportService(pg, "PlayerGui", "Saber_Export", 30000, 12) end
+	if pg then exportService(pg, "PlayerGui", OUT, 30000, 12) end
 end
 
 -- 5. Workspace (the map: regions, bosses, eggs, shops, pickups)
@@ -117,10 +133,10 @@ do
 	for _, r in ipairs(rows) do
 		table.insert(out, r.class .. ": " .. r.name .. " (" .. r.count .. " descendants)")
 	end
-	pcall(writefile, "Saber_Export/Workspace_topLevel.txt", table.concat(out, "\n"))
+	pcall(writefile, OUT .. "/Workspace_topLevel.txt", table.concat(out, "\n"))
 	print("[Export] Workspace top-level: " .. #rows .. " children")
 end
-exportService(ws, "Workspace", "Saber_Export", 20000, 10)
+exportService(ws, "Workspace", OUT, 20000, 10)
 
-print("[Export] Done. Files are in your executor workspace folder, under Saber_Export/")
+print("[Export] Done. Files are in your executor workspace folder, under " .. OUT .. "/")
 print("[Export] Send the *_tree.txt files first (StarterGui, StarterPlayerScripts, PlayerGui, Workspace_topLevel)")
