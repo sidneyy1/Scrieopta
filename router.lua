@@ -15,6 +15,11 @@ local GAMES = {
 		universeId = 1312971993,
 		file = "Saber Simulator/saber_autofarm_option1.lua",
 	},
+	[120219252362013] = { -- Throw Food For Animals (Goofy Chupacabra) - UniverseId 10766972131
+		name = "Throw Food For Animals",
+		universeId = 10766972131,
+		file = "Throw Food For Animals/throw_food_auto.lua",
+	},
 	-- Example for the next game:
 	-- [1234567890] = {
 	-- 	name = "Some Other Game",
