@@ -1,5 +1,8 @@
 --[[
 	Throw Food For Animals - auto perfect throw / equip best / upgrade base + bar
+	+ FULL CYCLE (from FullyAuto): N perfect throws -> equip best -> walk to
+	stand -> train X sec -> upgrade stand -> walk to shop -> try buy next
+	food -> repeat. Toggle "FULL CYCLE" in Rayfield.
 	Executor script (client-side). Field build, Nov 2026.
 	Rayfield UI (mobile-friendly, minimize in the top bar) with the original
 	draggable panel as fallback if Rayfield fails to load.
@@ -29,6 +32,18 @@ local CFG = {
 	upgradeEvery = 1.5,        -- seconds between upgrade passes
 	upgradeBurst = 12,         -- max upgrade invokes per pass
 	verbose = true,
+
+	-- CYCLE knobs (from FullyAuto)
+	throwsBeforeTrain = 10,  -- throws per cycle before walking to stand
+	trainSeconds = 60,       -- seconds of training per cycle
+	cyclePause = 1.5,        -- pause between full cycles
+	shopBuy = true,          -- try buying next food at end of cycle
+	maxPowerOnce = true,     -- call max throw power once at cycle start
+	trainClickInterval = 0,  -- 0 = stand only; >0 = click every N sec while training
+	shopBuyRemote = nil,     -- override e.g. "Shop_BuyFood" if the probe name differs
+	trainRemote = nil,       -- override e.g. "Train_Start"
+	shopOffset = Vector3.new(0, 0, 40),      -- fallback shop position rel. to StarterArea
+	trainOffset = Vector3.new(-16, 0, -30.5), -- stand bar position rel. to plot
 }
 
 local State = {
@@ -41,6 +56,8 @@ local State = {
 	perfects = 0,
 	spent = 0,
 	lastReason = "-",
+	cycle = false,
+	cycleStep = "idle",
 }
 
 local unloaded = false -- set by the Unload button; all loops check it and stop
@@ -68,7 +85,28 @@ local upgradeFenceR = remote("Plot_UpgradeFence")
 local upgradeStandR = remote("Stand_Upgrade")
 local setPowerR = remote("Player_SetThrowPower")
 
+local function probe(candidates, override)
+	if override then
+		local r = Remotes:FindFirstChild(override)
+		if r then return r end
+	end
+	for _, name in ipairs(candidates) do
+		local r = Remotes:FindFirstChild(name)
+		if r then return r end
+	end
+	return nil
+end
+
+-- CYCLE remotes: these names are PROBES, not confirmed.
+-- Training_Start IS a real remote (the probe script uses it), so the train
+-- remote will almost always be found. No shop-buy remote is confirmed yet -
+-- if none of these names exist, shopBuyR is nil and the cycle just skips
+-- the shop step (status line shows shop_remote=MISSING).
+local shopBuyR = probe({ "Shop_BuyFood", "Shop_Buy", "Food_Buy", "BuyFood", "Shop_Purchase" }, CFG.shopBuyRemote)
+local trainR = probe({ "Train_Start", "Training_Start", "Train_Tick", "Stand_Train" }, CFG.trainRemote)
+
 local function invoke(r, ...)
+	if not r then return { Ok = false, Reason = "NoRemote" } end
 	local ok, res = pcall(r.InvokeServer, r, ...)
 	if not ok or type(res) ~= "table" then
 		return { Ok = false, Reason = ok and "BadResponse" or tostring(res) }
@@ -162,6 +200,27 @@ local function waitUntilReady()
 	if delta > 0.05 then
 		task.wait(math.min(delta, 1.6))
 	end
+end
+
+-- stand/train position (plot relative - same spot as the stand bar upgrade)
+local function standPosition()
+	local plot = getPlot()
+	if not plot then return nil end
+	return plot.Position + CFG.trainOffset
+end
+
+-- shop position: probe workspace, else StarterArea + offset fallback
+local function shopPosition()
+	for _, name in ipairs({ "Shop", "Shops", "ShopZone", "ShopSign", "FoodShop" }) do
+		local inst = workspace:FindFirstChild(name, true)
+		if inst and inst:IsA("BasePart") then
+			return inst.Position + Vector3.new(0, 3, 0)
+		end
+	end
+	if StarterArea then
+		return StarterArea.Position + CFG.shopOffset + Vector3.new(0, 3, 0)
+	end
+	return nil
 end
 
 --------------------------------------------------------------------------------
@@ -400,6 +459,87 @@ local function maxThrowPower()
 end
 
 --------------------------------------------------------------------------------
+-- CYCLE passes: train + shop (from FullyAuto)
+--------------------------------------------------------------------------------
+
+local function currentFoodTier()
+	-- probe common attribute/data keys; fall back to 1 (unknown)
+	for _, key in ipairs({ "EquippedFood", "FoodTier", "FoodIndex", "EquippedFoodIndex" }) do
+		local v = player:GetAttribute(key)
+		if type(v) == "number" then return v end
+	end
+	do
+		local scripts = player:FindFirstChild("PlayerScripts")
+		local client = scripts and scripts:FindFirstChild("Client")
+		local controllers = client and client:FindFirstChild("Controllers")
+		local data = controllers and controllers:FindFirstChild("DataController")
+		local mod = data and safeRequire(data)
+		if mod and mod.Get then
+			for _, key in ipairs({ "EquippedFood", "FoodTier", "FoodIndex" }) do
+				local v = mod.Get(key)
+				if type(v) == "number" then return v end
+			end
+		end
+	end
+	return nil
+end
+
+local function trainPass(seconds)
+	local pos = standPosition()
+	if not pos then return false, "NoPlot" end
+	local char, root = character()
+	if not root then return false, "NoCharacter" end
+	if CFG.autoPosition then placeAt(root, pos) end
+
+	if trainR then
+		pcall(function()
+			if trainR:IsA("RemoteEvent") then trainR:FireServer()
+			else trainR:InvokeServer() end
+		end)
+	end
+
+	local deadline = os.clock() + seconds
+	local clickAt = os.clock() + (CFG.trainClickInterval > 0 and CFG.trainClickInterval or math.huge)
+	while os.clock() < deadline do
+		if not State.cycle then return false, "CycleOff" end
+		local _, r = character()
+		if not r then return false, "NoCharacter" end
+		if not CFG.autoPosition then
+			r.AssemblyLinearVelocity = Vector3.zero
+		end
+		if CFG.trainClickInterval > 0 and os.clock() >= clickAt then
+			VirtualUser:ClickButton1(Vector3.new(
+				workspace.CurrentCamera.ViewportSize.X / 2,
+				workspace.CurrentCamera.ViewportSize.Y / 2
+			))
+			clickAt = os.clock() + CFG.trainClickInterval
+		end
+		task.wait(0.25)
+	end
+	return true, ("trained %ds"):format(math.floor(seconds))
+end
+
+local function shopBuyPass()
+	if not CFG.shopBuy then return false, "Disabled" end
+	if not shopBuyR then return false, "NoRemote" end
+	local pos = shopPosition()
+	local char, root = character()
+	if not root then return false, "NoCharacter" end
+	if pos and CFG.autoPosition then
+		placeAt(root, pos)
+		task.wait(0.15)
+	end
+
+	local tier = currentFoodTier() or 1
+	local tryTier = tier + 1
+	local res = invoke(shopBuyR, tryTier)
+	if res.Ok then
+		return true, ("bought tier %d"):format(tryTier)
+	end
+	return false, ("buy %d: %s"):format(tryTier, tostring(res.Reason or "Refused"))
+end
+
+--------------------------------------------------------------------------------
 -- UI - Rayfield (mobile-friendly), original panel as fallback
 --------------------------------------------------------------------------------
 -- Loading label FIRST so mobile can see the script started (no console).
@@ -428,14 +568,14 @@ local simpleGui
 
 -- One refresh() for both UIs: Rayfield paragraph, or the simple panel labels.
 function refresh()
+	local step = State.cycle and ("cycle:" .. State.cycleStep) or (State.throw and "running" or "idle")
 	local text = ("throws %d  |  perfect %d\nlast: %s"):format(State.throws, State.perfects, State.lastReason)
-	local runText = State.throw and "running" or "idle"
 	if useRayfield and statusPara then
-		pcall(function() statusPara:Set({ Title = "Status (" .. runText .. ")", Content = text }) end)
+		pcall(function() statusPara:Set({ Title = "Status (" .. step .. ")", Content = text }) end)
 		pcall(function() statusPara:SetTitle(text) end)
 	elseif statusLabel then
 		statusLabel.Text = text
-		if statsLabel then statsLabel.Text = runText end
+		if statsLabel then statsLabel.Text = step .. " | shop=" .. (shopBuyR and "yes" or "MISSING") .. " train=" .. (trainR and "yes" or "none") end
 	end
 end
 
@@ -458,9 +598,22 @@ local function setAll(on)
 end
 
 local function stopAll()
-	State.throw, State.equip, State.fence, State.stand = false, false, false, false
+	State.throw, State.equip, State.fence, State.stand, State.cycle = false, false, false, false, false
+	State.cycleStep = "idle"
 	blockVanillaThrow(false)
 	State.lastReason = "stopped"
+	refresh()
+end
+
+local function setCycle(on)
+	State.cycle = on
+	if on then
+		if CFG.maxPowerOnce then maxThrowPower() end
+		State.cycleStep = "starting"
+	else
+		State.cycleStep = "idle"
+	end
+	blockVanillaThrow(on and not State.tapMode)
 	refresh()
 end
 
@@ -511,6 +664,34 @@ if useRayfield then
 			CurrentValue = false,
 			Flag = "StandToggle",
 			Callback = function(state) State.stand = state refresh() end,
+		})
+		MainTab:CreateToggle({
+			Name = "FULL CYCLE (throws -> train -> upgrade -> shop)",
+			CurrentValue = false,
+			Flag = "CycleToggle",
+			Callback = function(state) setCycle(state) end,
+		})
+		MainTab:CreateSlider({
+			Name = "Throws Before Train",
+			Range = { 5, 50 },
+			Increment = 5,
+			CurrentValue = 10,
+			Flag = "ThrowsBeforeTrain",
+			Callback = function(value) CFG.throwsBeforeTrain = value end,
+		})
+		MainTab:CreateSlider({
+			Name = "Train Seconds",
+			Range = { 30, 300 },
+			Increment = 30,
+			CurrentValue = 60,
+			Flag = "TrainSeconds",
+			Callback = function(value) CFG.trainSeconds = value end,
+		})
+		MainTab:CreateToggle({
+			Name = "Shop Buy (buy next food in cycle)",
+			CurrentValue = true,
+			Flag = "ShopBuyToggle",
+			Callback = function(state) CFG.shopBuy = state refresh() end,
 		})
 		MainTab:CreateToggle({
 			Name = "Tap Mode (real meter click)",
@@ -588,8 +769,8 @@ local function buildSimpleUI()
 
 	local frame = Instance.new("Frame")
 	frame.Name = "Panel"
-	frame.Size = UDim2.fromOffset(292, 386)
-	frame.Position = UDim2.new(0, 24, 0.5, -193)
+	frame.Size = UDim2.fromOffset(292, 420)
+	frame.Position = UDim2.new(0, 24, 0.5, -210)
 	frame.BackgroundColor3 = Color3.fromRGB(18, 20, 22)
 	frame.BorderSizePixel = 0
 	frame.Active = true
@@ -648,8 +829,6 @@ local function buildSimpleUI()
 		end
 	end
 
-	local refresh
-
 	local labels = {
 		{ key = "throw", text = "Auto Throw (perfect 20)", y = 78 },
 		{ key = "equip", text = "Auto Equip Best", y = 114 },
@@ -663,6 +842,7 @@ local function buildSimpleUI()
 		buttons[spec.key] = b
 		paint(b, State[spec.key])
 		b.MouseButton1Click:Connect(function()
+			if State.cycle then return end
 			State[spec.key] = not State[spec.key]
 			paint(b, State[spec.key])
 			if spec.key == "throw" then
@@ -672,7 +852,25 @@ local function buildSimpleUI()
 		end)
 	end
 
-	local full = makeButton("FULL AUTO  (all on)", 254)
+	local cycleBtn = makeButton("", 254, 30)
+	local function paintCycle()
+		if State.cycle then
+			cycleBtn.Text = ("CYCLE: ON  %dx throws | %ds train"):format(CFG.throwsBeforeTrain, CFG.trainSeconds)
+			cycleBtn.BackgroundColor3 = Color3.fromRGB(38, 74, 46)
+			cycleBtn.TextColor3 = Color3.fromRGB(170, 255, 190)
+		else
+			cycleBtn.Text = "CYCLE: OFF  (full auto loop)"
+			cycleBtn.BackgroundColor3 = Color3.fromRGB(34, 37, 41)
+			cycleBtn.TextColor3 = Color3.fromRGB(220, 220, 220)
+		end
+	end
+	paintCycle()
+	cycleBtn.MouseButton1Click:Connect(function()
+		setCycle(not State.cycle)
+		paintCycle()
+	end)
+
+	local full = makeButton("FULL AUTO  (all on)", 288)
 	corner(full, 8)
 	full.BackgroundColor3 = Color3.fromRGB(52, 90, 60)
 	full.TextColor3 = Color3.fromRGB(210, 255, 220)
@@ -706,29 +904,31 @@ local function buildSimpleUI()
 		refresh()
 	end)
 
-	local power = makeButton("Set max throw power", 288, 28)
+	local power = makeButton("Set max throw power", 322, 28)
 	power.MouseButton1Click:Connect(function()
 		local ok, msg = maxThrowPower()
 		State.lastReason = tostring(ok and msg or msg)
 		refresh()
 	end)
 
-	local stop = makeButton("STOP ALL", 320, 28)
+	local stop = makeButton("STOP ALL", 354, 28)
 	stop.BackgroundColor3 = Color3.fromRGB(76, 34, 34)
 	stop.TextColor3 = Color3.fromRGB(255, 200, 200)
 	stop.MouseButton1Click:Connect(function()
-		State.throw, State.equip, State.fence, State.stand = false, false, false, false
+		State.throw, State.equip, State.fence, State.stand, State.cycle = false, false, false, false, false
+		State.cycleStep = "idle"
 		blockVanillaThrow(false)
 		for _, spec in ipairs(labels) do
 			paint(buttons[spec.key], false)
 		end
+		paintCycle()
 		State.lastReason = "stopped"
 		refresh()
 	end)
 
 	statsLabel = Instance.new("TextLabel")
 	statsLabel.Size = UDim2.new(1, -24, 0, 24)
-	statsLabel.Position = UDim2.fromOffset(12, 352)
+	statsLabel.Position = UDim2.fromOffset(12, 386)
 	statsLabel.BackgroundTransparency = 1
 	statsLabel.Font = Enum.Font.Code
 	statsLabel.TextSize = 11
@@ -765,7 +965,7 @@ end)
 
 task.spawn(function()
 	while not unloaded do
-		if State.throw then
+		if State.throw and not State.cycle then
 			local ok, res
 			if State.tapMode then
 				ok, res = tapThrow()
@@ -788,7 +988,7 @@ end)
 
 task.spawn(function()
 	while not unloaded do
-		if State.equip then
+		if State.equip and not State.cycle then
 			local ok, reason = equipBestPass()
 			State.lastReason = ok and "equipped best" or ("equip: " .. tostring(reason))
 			refresh()
@@ -801,7 +1001,7 @@ end)
 
 task.spawn(function()
 	while not unloaded do
-		if State.fence then
+		if State.fence and not State.cycle then
 			local ok, reason = upgradeFencePass()
 			if ok then
 				State.lastReason = "base upgraded"
@@ -820,7 +1020,7 @@ end)
 
 task.spawn(function()
 	while not unloaded do
-		if State.stand then
+		if State.stand and not State.cycle then
 			local ok, reason = upgradeStandPass()
 			if ok then
 				State.lastReason = "bar upgraded"
@@ -837,5 +1037,76 @@ task.spawn(function()
 	end
 end)
 
+-- CYCLE controller (from FullyAuto): throws -> equip -> train -> upgrade stand -> shop -> repeat
+task.spawn(function()
+	while not unloaded do
+		if not State.cycle then
+			task.wait(0.3)
+		else
+			-- 1. N perfect throws
+			State.cycleStep = ("throw x%d"):format(CFG.throwsBeforeTrain)
+			refresh()
+			for i = 1, CFG.throwsBeforeTrain do
+				if not State.cycle then break end
+				local ok, res
+				if State.tapMode then ok, res = tapThrow() else ok, res = throwOnce() end
+				if ok then
+					State.throws += 1
+					State.perfects += 1
+					State.lastReason = ("throw %d/%d perfect"):format(i, CFG.throwsBeforeTrain)
+				else
+					State.lastReason = ("throw %d: %s"):format(i, tostring(res))
+					task.wait(0.4)
+				end
+				refresh()
+				task.wait(CFG.throwGap)
+			end
+
+			-- 2. equip best
+			if State.cycle then
+				State.cycleStep = "equip"
+				refresh()
+				local eqOk, eqReason = equipBestPass()
+				State.lastReason = eqOk and "equipped best" or ("equip: " .. tostring(eqReason))
+				refresh()
+				task.wait(0.3)
+			end
+
+			-- 3. walk to stand + train
+			if State.cycle then
+				State.cycleStep = ("train %ds"):format(CFG.trainSeconds)
+				refresh()
+				local trOk, trReason = trainPass(CFG.trainSeconds)
+				State.lastReason = trOk and tostring(trReason) or ("train: " .. tostring(trReason))
+				refresh()
+			end
+
+			-- 4. upgrade stand
+			if State.cycle then
+				State.cycleStep = "upgrade stand"
+				refresh()
+				local upOk, upReason = upgradeStandPass()
+				State.lastReason = upOk and "bar upgraded"
+					or (upReason == "Money" and "bar maxed / no money" or ("bar: " .. tostring(upReason)))
+				refresh()
+				task.wait(0.3)
+			end
+
+			-- 5. walk to shop + try buy next food
+			if State.cycle and CFG.shopBuy then
+				State.cycleStep = "shop"
+				refresh()
+				local shOk, shReason = shopBuyPass()
+				State.lastReason = shOk and tostring(shReason) or ("shop: " .. tostring(shReason))
+				refresh()
+			end
+
+			State.cycleStep = "cycle pause"
+			refresh()
+			task.wait(CFG.cyclePause)
+		end
+	end
+end)
+
 refresh()
-print("[olliE] throw auto loaded (Rayfield" .. (useRayfield and "" or " FAILED - simple GUI") .. ") - meterDelay " .. string.format("%.4f", meterDelay) .. "s")
+print("[olliE] throw auto loaded (Rayfield" .. (useRayfield and "" or " FAILED - simple GUI") .. " + FULL CYCLE) - meterDelay " .. string.format("%.4f", meterDelay) .. "s shop_remote=" .. (shopBuyR and "yes" or "MISSING") .. " train_remote=" .. (trainR and "yes" or "none"))
