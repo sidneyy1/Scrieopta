@@ -33,3 +33,13 @@ Direct loadstring (no router):
 ```lua
 loadstring(game:HttpGet("https://raw.githubusercontent.com/sidneyy1/Scrieopta/main/Saber%20Simulator/saber_autofarm_option1.lua"))()
 ```
+
+## RemoteSpy (any game)
+
+`RemoteSpy.lua` at the repo root — hooks every RemoteEvent / RemoteFunction and streams the calls live to the RemoteSpy Receiver site (Supabase). Works in any game, not just the ones above.
+
+```lua
+loadstring(game:HttpGet("https://raw.githubusercontent.com/sidneyy1/Scrieopta/main/RemoteSpy.lua"))()
+```
+
+Live feed: https://sidneyy1.github.io/RemoteSpy-Receiver/
