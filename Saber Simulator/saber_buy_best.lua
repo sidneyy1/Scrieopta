@@ -42,8 +42,92 @@ end
 -- How many sabers to try per check in fallback mode (cheapest first)
 local TRY_COUNT = 10
 
-while true do
+-- ===== X / Minimize GUI =====
+local unloaded = false
+local gui = Instance.new("ScreenGui")
+gui.Name = "SaberBuyBest"
+gui.ResetOnSpawn = false
+gui.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
+
+local mainFrame = Instance.new("Frame")
+mainFrame.Size = UDim2.new(0, 200, 0, 48)
+mainFrame.Position = UDim2.new(0, 16, 0, 220)
+mainFrame.BackgroundColor3 = Color3.fromRGB(30, 30, 30)
+mainFrame.BorderSizePixel = 0
+mainFrame.Parent = gui
+
+local title = Instance.new("TextLabel")
+title.Size = UDim2.new(1, -64, 0, 24)
+title.Position = UDim2.new(0, 8, 0, 0)
+title.BackgroundTransparency = 1
+title.TextColor3 = Color3.fromRGB(255, 255, 255)
+title.TextSize = 14
+title.Font = Enum.Font.SourceSansBold
+title.TextXAlignment = Enum.TextXAlignment.Left
+title.Text = "Buy Best Saber"
+title.Parent = mainFrame
+
+local minimizeBtn = Instance.new("TextButton")
+minimizeBtn.Size = UDim2.new(0, 24, 0, 24)
+minimizeBtn.Position = UDim2.new(1, -56, 0, 0)
+minimizeBtn.BackgroundColor3 = Color3.fromRGB(60, 60, 60)
+minimizeBtn.TextColor3 = Color3.fromRGB(255, 255, 255)
+minimizeBtn.TextSize = 16
+minimizeBtn.Font = Enum.Font.SourceSansBold
+minimizeBtn.Text = "–"
+minimizeBtn.Parent = mainFrame
+
+local closeBtn = Instance.new("TextButton")
+closeBtn.Size = UDim2.new(0, 24, 0, 24)
+closeBtn.Position = UDim2.new(1, -28, 0, 0)
+closeBtn.BackgroundColor3 = Color3.fromRGB(170, 40, 40)
+closeBtn.TextColor3 = Color3.fromRGB(255, 255, 255)
+closeBtn.TextSize = 16
+closeBtn.Font = Enum.Font.SourceSansBold
+closeBtn.Text = "X"
+closeBtn.Parent = mainFrame
+
+local status = Instance.new("TextLabel")
+status.Size = UDim2.new(1, -16, 0, 20)
+status.Position = UDim2.new(0, 8, 0, 24)
+status.BackgroundTransparency = 1
+status.TextColor3 = Color3.fromRGB(255, 255, 255)
+status.TextSize = 13
+status.Text = "Running - checking every 5s"
+status.Parent = mainFrame
+
+local miniBtn = Instance.new("TextButton")
+miniBtn.Size = UDim2.new(0, 64, 0, 28)
+miniBtn.Position = UDim2.new(0, 16, 0, 220)
+miniBtn.BackgroundColor3 = Color3.fromRGB(30, 30, 30)
+miniBtn.TextColor3 = Color3.fromRGB(255, 255, 255)
+miniBtn.TextSize = 14
+miniBtn.Font = Enum.Font.SourceSansBold
+miniBtn.Text = "Saber +"
+miniBtn.Visible = false
+miniBtn.Parent = gui
+
+pcall(function() gui.Parent = game:GetService("CoreGui") end)
+if not gui.Parent then gui.Parent = Players.LocalPlayer:WaitForChild("PlayerGui") end
+
+minimizeBtn.MouseButton1Click:Connect(function()
+	mainFrame.Visible = false
+	miniBtn.Visible = true
+end)
+miniBtn.MouseButton1Click:Connect(function()
+	mainFrame.Visible = true
+	miniBtn.Visible = false
+end)
+closeBtn.MouseButton1Click:Connect(function()
+	unloaded = true
+	print("[BuyBest] Unloaded - loop stopped, GUI removed. Re-run the loadstring to start again.")
+	pcall(function() gui:Destroy() end)
+end)
+-- ============================
+
+while not unloaded do
 	task.wait(5)
+	if unloaded then break end
 	local coins = getCoins()
 	local current = getCurrentSaber()
 	local currentGain = (current and Swords[current] and Swords[current].AmountPerClick) or 0
@@ -80,6 +164,7 @@ while true do
 		end
 		print("[BuyBest] Coins unknown - trying next " .. TRY_COUNT .. " sabers from index " .. startIdx)
 		for i = startIdx, math.min(startIdx + TRY_COUNT - 1, #Order) do
+			if unloaded then break end
 			local name = Order[i]
 			print("[BuyBest] Trying: " .. name .. " price=" .. tostring(Swords[name].Price))
 			local args = { "BuyWeapon", name }
