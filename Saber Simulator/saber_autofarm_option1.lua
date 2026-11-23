@@ -1,4 +1,4 @@
--- Saber Simulator - Auto-Swing + Auto-Sell + Auto-Buy Saber + Auto-Buy DNA (MAIN script, v9 - Rayfield)
+-- Saber Simulator - Auto-Swing + Auto-Sell + Auto-Buy Saber + Auto-Buy DNA (MAIN script, v10 - Rayfield)
 -- v7: GUI switched to Rayfield (Sirius) - https://docs.sirius.menu/rayfield/
 --   local Rayfield = loadstring(game:HttpGet('https://sirius.menu/rayfield'))()
 --   Rayfield is the most-used UI on mobile executors, with a built-in
@@ -453,6 +453,11 @@ end
 -- v9 fix: the buy loop used to only run while Auto-Farm was ON, so turning
 -- on Auto-Buy DNA alone did nothing - the DNA check never ran. Buy checks
 -- now run whenever the farm is on OR either buy toggle is on.
+-- v10 fix: DNA buying used to aim for the BEST affordable DNA (e.g. Rainbow
+-- at 25M Coins) and skip ahead - the server only sells the NEXT DNA in
+-- order, so that buy was rejected and nothing ever bought. Now it buys the
+-- NEXT DNA above your current one (Checkered after Pattern, etc.) and walks
+-- up one per check until it reaches the best you can afford.
 local function indexOfDNA(name)
 	for i, n in ipairs(DNAsOrder) do if n == name then return i end end
 	return 0
@@ -474,20 +479,23 @@ local function tryBuyDNA()
 	updateDNAInfo("Check #" .. dnaAttempts .. " | Coins: " .. (coinsIM and tostring(coinsIM) or "UNKNOWN") .. " | Current: " .. tostring(current))
 
 	if coinsIM then
-		-- Best affordable DNA with MORE storage than current, Coins only (skip Robux)
+		-- NEXT DNA above current, affordable, Coins only (skip Robux).
+		-- DNAs_Order is sorted by MaxStorage, so the first match IS the next one.
+		-- Do NOT skip ahead to the best affordable: the server only sells the
+		-- next DNA in order, and a skipped-ahead buy is rejected silently.
 		local target = nil
 		for _, name in ipairs(DNAsOrder) do
 			local info = DNAs[name]
 			if info and info.Currency ~= "Robux" and info.MaxStorage > currentStorage then
 				local priceIM = toIM(info.Price)
-				if priceIM and coinsIM >= priceIM then
-					if not target or info.MaxStorage > DNAs[target].MaxStorage then target = name end
-				end
+				if priceIM and coinsIM >= priceIM then target = name break end
+				-- Next DNA not affordable yet: stop, don't look further ahead
+				break
 			end
 		end
 		if not target then
-			print("[AutoFarm] DNA check: no affordable upgrade yet")
-			updateDNAInfo("No affordable DNA upgrade yet | Coins: " .. tostring(coinsIM) .. " | Current: " .. tostring(current))
+			print("[AutoFarm] DNA check: next DNA not affordable yet")
+			updateDNAInfo("Next DNA not affordable yet | Coins: " .. tostring(coinsIM) .. " | Current: " .. tostring(current))
 			return
 		end
 		print("[AutoFarm] Buying DNA: " .. target .. " price=" .. tostring(DNAs[target].Price))
@@ -580,7 +588,7 @@ MainTab:CreateButton({
 })
 
 MainTab:CreateButton({
-	Name = "Buy Best DNA Now",
+	Name = "Buy Next DNA Now",
 	Callback = function()
 		local was = AUTO_BUY_DNA
 		AUTO_BUY_DNA = true -- one test buy only, toggle stays as it was
@@ -640,4 +648,4 @@ end)
 if useRayfield then
 	pcall(function() Rayfield:Notify({ Title = "Saber Auto-Farm", Content = "Loaded. Turn on Auto-Farm in the Main tab.", Duration = 5 }) end)
 end
-print("[AutoFarm] Loaded v9 (Rayfield + Auto-Buy DNA fix" .. (useRayfield and "" or " FAILED - simple GUI") .. " + InfiniteMath Coins fix). Minimize: Rayfield top-bar button. Unload: button in Main tab.")
+print("[AutoFarm] Loaded v10 (Rayfield + Auto-Buy DNA next-only fix" .. (useRayfield and "" or " FAILED - simple GUI") .. " + InfiniteMath Coins fix). Minimize: Rayfield top-bar button. Unload: button in Main tab.")
