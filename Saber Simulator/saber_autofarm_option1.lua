@@ -1,4 +1,4 @@
--- Saber Simulator - Auto-Swing + Auto-Sell + Auto-Buy Saber + Auto-Buy DNA (MAIN script, v13 - Rayfield)
+-- Saber Simulator - Auto-Swing + Auto-Sell + Auto-Buy Saber + Auto-Buy DNA (MAIN script, v14 - Rayfield)
 -- v7: GUI switched to Rayfield (Sirius) - https://docs.sirius.menu/rayfield/
 --   local Rayfield = loadstring(game:HttpGet('https://sirius.menu/rayfield'))()
 --   Rayfield is the most-used UI on mobile executors, with a built-in
@@ -479,6 +479,12 @@ end
 -- (index 14) is tried in the very first batch. Also fixed: comparing a
 -- table price with `> 0` errored and killed the buy loop thread - the loop
 -- calls are now pcall-guarded so one bad DNA can't stop all buying.
+-- v14 fix: the batch still tried EVERY DNA it passed, even ones you can't
+-- afford - that's why it fired BuyDNA for Surge DNA (price 3.99e226) when
+-- you have 25M Coins. Now the batch only tries DNAs priced at or below your
+-- Coins, and once the cursor passes the last affordable DNA it wraps back to
+-- the start, so after Checkered is bought it re-tries Beast, Alien, etc. -
+-- the next one each time - instead of marching on to DNAs you can't afford.
 local function indexOfDNA(name)
 	for i, n in ipairs(DNAsOrder) do if n == name then return i end end
 	return 0
@@ -542,29 +548,45 @@ local function tryBuyDNA()
 
 	if coinsIM then
 		if not current then
-			-- Current DNA unknown: try a BATCH of 20 per check (not one per
-			-- check - that took 280 checks to walk the whole list), number-priced
-			-- DNAs only. Table-priced DNAs (Mirage etc., price {mantissa, exponent})
-			-- are endgame and unaffordable here, so they are skipped entirely.
-			-- Checkered is index 14, so it is tried in the first batch.
-			if dnaCursor < 2 or dnaCursor > #DNAsOrder then dnaCursor = 2 end
-			local last = math.min(dnaCursor + 19, #DNAsOrder)
-			print("[AutoFarm] DNA check: current unknown - trying DNAs " .. dnaCursor .. "-" .. last .. " of " .. #DNAsOrder)
-			updateDNAInfo("Current DNA unknown - trying DNAs " .. dnaCursor .. "-" .. last .. " | Coins: " .. tostring(coinsIM) .. (clientDataKeys ~= "" and " | Data keys: " .. string.sub(clientDataKeys, 1, 120) or ""))
+			-- Current DNA unknown: try a BATCH of affordable DNAs per check.
+			-- Only DNAs priced at or below your Coins are tried - Surge DNA
+			-- (3.99e226) and the rest of the endgame list can never come up
+			-- when you have 25M Coins. The cursor wraps back to the start
+			-- after the last affordable DNA, so after Checkered is bought
+			-- the next check re-tries Beast, Alien, etc. - the new next one.
+			local affordIdx = 1
+			for i = 2, #DNAsOrder do
+				local info = DNAs[DNAsOrder[i]]
+				if info and info.Currency ~= "Robux" then
+					local priceIM = toIM(info.Price)
+					if priceIM and coinsIM >= priceIM then affordIdx = i end
+				end
+			end
+			if affordIdx < 2 then
+				updateDNAInfo("No affordable DNA yet | Coins: " .. tostring(coinsIM))
+				return
+			end
+			if dnaCursor < 2 or dnaCursor > affordIdx then dnaCursor = 2 end
+			local last = math.min(dnaCursor + 19, affordIdx)
+			print("[AutoFarm] DNA check: current unknown - trying affordable DNAs " .. dnaCursor .. "-" .. last .. " of " .. affordIdx .. " | Coins: " .. tostring(coinsIM))
+			updateDNAInfo("Current DNA unknown - trying affordable DNAs " .. dnaCursor .. "-" .. last .. " | Coins: " .. tostring(coinsIM))
 			for i = dnaCursor, last do
 				if unloaded then break end
 				local name = DNAsOrder[i]
 				local info = DNAs[name]
-				if info and info.Currency ~= "Robux" and type(info.Price) == "number" then
-					print("[AutoFarm] Trying DNA: " .. name .. " price=" .. tostring(info.Price))
-					lastBuyDNATarget = name
-					local args = { BUY_DNA_ACTION, name }
-					pcall(function() UIAction:FireServer(unpack(args)) end)
-					task.wait(0.15)
+				if info and info.Currency ~= "Robux" then
+					local priceIM = toIM(info.Price)
+					if priceIM and coinsIM >= priceIM then
+						print("[AutoFarm] Trying DNA: " .. name .. " price=" .. tostring(info.Price))
+						lastBuyDNATarget = name
+						local args = { BUY_DNA_ACTION, name }
+						pcall(function() UIAction:FireServer(unpack(args)) end)
+						task.wait(0.15)
+					end
 				end
 			end
 			dnaCursor = last + 1
-			if dnaCursor > #DNAsOrder then dnaCursor = 2 end
+			if dnaCursor > affordIdx then dnaCursor = 2 end
 			return
 		end
 		-- NEXT DNA above current, affordable, Coins only (skip Robux).
@@ -767,4 +789,4 @@ end)
 if useRayfield then
 	pcall(function() Rayfield:Notify({ Title = "Saber Auto-Farm", Content = "Loaded. Turn on Auto-Farm in the Main tab.", Duration = 5 }) end)
 end
-print("[AutoFarm] Loaded v13 (Rayfield + DNA auto-detect + manual current DNA box" .. (useRayfield and "" or " FAILED - simple GUI") .. " + InfiniteMath Coins fix). Minimize: Rayfield top-bar button. Unload: button in Main tab.")
+print("[AutoFarm] Loaded v14 (Rayfield + DNA affordable-only batch" .. (useRayfield and "" or " FAILED - simple GUI") .. " + InfiniteMath Coins fix). Minimize: Rayfield top-bar button. Unload: button in Main tab.")
