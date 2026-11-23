@@ -1,4 +1,4 @@
--- Saber Simulator - Auto-Swing + Auto-Sell + Auto-Buy Saber + Auto-Buy DNA (MAIN script, v10 - Rayfield)
+-- Saber Simulator - Auto-Swing + Auto-Sell + Auto-Buy Saber + Auto-Buy DNA (MAIN script, v11 - Rayfield)
 -- v7: GUI switched to Rayfield (Sirius) - https://docs.sirius.menu/rayfield/
 --   local Rayfield = loadstring(game:HttpGet('https://sirius.menu/rayfield'))()
 --   Rayfield is the most-used UI on mobile executors, with a built-in
@@ -458,6 +458,11 @@ end
 -- order, so that buy was rejected and nothing ever bought. Now it buys the
 -- NEXT DNA above your current one (Checkered after Pattern, etc.) and walks
 -- up one per check until it reaches the best you can afford.
+-- v11 fix: if your current DNA can't be read (clientData.DNA empty), the old
+-- code treated your storage as 0 and picked Basic DNA (price 0) every single
+-- check - a buy the server always rejects - so it NEVER reached Checkered.
+-- Now an unknown current DNA cycles through the DNAs in order instead,
+-- skipping Basic, so it will reach Checkered and buy it.
 local function indexOfDNA(name)
 	for i, n in ipairs(DNAsOrder) do if n == name then return i end end
 	return 0
@@ -479,24 +484,36 @@ local function tryBuyDNA()
 	updateDNAInfo("Check #" .. dnaAttempts .. " | Coins: " .. (coinsIM and tostring(coinsIM) or "UNKNOWN") .. " | Current: " .. tostring(current))
 
 	if coinsIM then
-		-- NEXT DNA above current, affordable, Coins only (skip Robux).
-		-- DNAs_Order is sorted by MaxStorage, so the first match IS the next one.
-		-- Do NOT skip ahead to the best affordable: the server only sells the
-		-- next DNA in order, and a skipped-ahead buy is rejected silently.
 		local target = nil
-		for _, name in ipairs(DNAsOrder) do
-			local info = DNAs[name]
-			if info and info.Currency ~= "Robux" and info.MaxStorage > currentStorage then
-				local priceIM = toIM(info.Price)
-				if priceIM and coinsIM >= priceIM then target = name break end
-				-- Next DNA not affordable yet: stop, don't look further ahead
-				break
+		if not current then
+			-- Current DNA unknown: do NOT guess storage 0 (that picks Basic DNA,
+			-- price 0, every check - always rejected). Cycle through the DNAs in
+			-- order instead, one per check, skipping Basic (index 1).
+			if dnaCursor < 2 or dnaCursor > #DNAsOrder then dnaCursor = 2 end
+			target = DNAsOrder[dnaCursor]
+			print("[AutoFarm] DNA check: current DNA unknown - trying in order: " .. target)
+			updateDNAInfo("Current DNA unknown - trying in order: " .. target .. " | Price: " .. tostring(DNAs[target].Price) .. " | Coins: " .. tostring(coinsIM))
+			dnaCursor = dnaCursor + 1
+			if dnaCursor > #DNAsOrder then dnaCursor = 2 end
+		else
+			-- NEXT DNA above current, affordable, Coins only (skip Robux).
+			-- DNAs_Order is sorted by MaxStorage, so the first match IS the next one.
+			-- Do NOT skip ahead to the best affordable: the server only sells the
+			-- next DNA in order, and a skipped-ahead buy is rejected silently.
+			for _, name in ipairs(DNAsOrder) do
+				local info = DNAs[name]
+				if info and info.Currency ~= "Robux" and info.Price > 0 and info.MaxStorage > currentStorage then
+					local priceIM = toIM(info.Price)
+					if priceIM and coinsIM >= priceIM then target = name break end
+					-- Next DNA not affordable yet: stop, don't look further ahead
+					break
+				end
 			end
-		end
-		if not target then
-			print("[AutoFarm] DNA check: next DNA not affordable yet")
-			updateDNAInfo("Next DNA not affordable yet | Coins: " .. tostring(coinsIM) .. " | Current: " .. tostring(current))
-			return
+			if not target then
+				print("[AutoFarm] DNA check: next DNA not affordable yet")
+				updateDNAInfo("Next DNA not affordable yet | Coins: " .. tostring(coinsIM) .. " | Current: " .. tostring(current))
+				return
+			end
 		end
 		print("[AutoFarm] Buying DNA: " .. target .. " price=" .. tostring(DNAs[target].Price))
 		updateDNAInfo("Sent buy for DNA: " .. target .. " | Price: " .. tostring(DNAs[target].Price) .. " | Coins: " .. tostring(coinsIM))
@@ -507,7 +524,7 @@ local function tryBuyDNA()
 	else
 		-- Coins unknown: cycle through ALL DNAs in batches of 20, like sabers
 		if current then dnaCursor = indexOfDNA(current) + 1 end
-		if dnaCursor < 1 or dnaCursor > #DNAsOrder then dnaCursor = 1 end
+		if dnaCursor < 2 or dnaCursor > #DNAsOrder then dnaCursor = 2 end -- skip Basic (price 0)
 		local last = math.min(dnaCursor + 19, #DNAsOrder)
 		print("[AutoFarm] DNA check: Coins unknown - trying DNAs " .. dnaCursor .. "-" .. last .. " of " .. #DNAsOrder)
 		for i = dnaCursor, last do
@@ -522,7 +539,7 @@ local function tryBuyDNA()
 			end
 		end
 		dnaCursor = last + 1
-		if dnaCursor > #DNAsOrder then dnaCursor = 1 end
+		if dnaCursor > #DNAsOrder then dnaCursor = 2 end
 	end
 end
 
@@ -648,4 +665,4 @@ end)
 if useRayfield then
 	pcall(function() Rayfield:Notify({ Title = "Saber Auto-Farm", Content = "Loaded. Turn on Auto-Farm in the Main tab.", Duration = 5 }) end)
 end
-print("[AutoFarm] Loaded v10 (Rayfield + Auto-Buy DNA next-only fix" .. (useRayfield and "" or " FAILED - simple GUI") .. " + InfiniteMath Coins fix). Minimize: Rayfield top-bar button. Unload: button in Main tab.")
+print("[AutoFarm] Loaded v11 (Rayfield + Auto-Buy DNA unknown-current fix" .. (useRayfield and "" or " FAILED - simple GUI") .. " + InfiniteMath Coins fix). Minimize: Rayfield top-bar button. Unload: button in Main tab.")
