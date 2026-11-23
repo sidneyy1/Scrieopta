@@ -1,20 +1,22 @@
--- Saber Simulator - Option 1: Auto-Swing + Auto-Sell + Auto-Buy Saber (FIXED v3)
+-- Saber Simulator - Auto-Swing + Auto-Sell + Auto-Buy Saber (MAIN script, v5)
 -- Based ONLY on ReplicatedStorage export (Saber.zip)
 --   ReplicatedStorage/Events/SwingSaber   -> gains Strength
 --   ReplicatedStorage/Events/SellStrength -> converts Strength to Coins
 --   StatsCalculator.GetStrengthGain = floor(Swords[Saber].AmountPerClick * StrengthMulti)
 --   ItemInfo.Swords[name].Price = Coins price, ItemInfo.Swords_Order = sabers sorted by AmountPerClick (VIP excluded)
 --
--- FIXES in v3 (why v2 didn't buy the best saber):
---   1. v2's blind mode had a bug: when Coins/current Saber couldn't be read,
---      it kept re-trying Starter/Green and never advanced. v3 keeps a persistent
---      assumedIndex and only advances when UpdateClientData shows your Saber
---      actually changed, or your Coins dropped after a buy.
---   2. v2's short snippet in chat had a bug too: it picked the best AFFORDABLE
---      saber even if you already owned it, so it kept re-buying the same one.
---      v3 only picks sabers better than your current one.
---   3. v3 prints every buy check (Coins / current / target / price) so you can
---      see in the console WHY it did or didn't buy.
+-- ROOT CAUSE found in the export (why v3/v4 didn't buy):
+--   Coins in this game are NOT plain numbers. StatsCalculator uses
+--   InfiniteMath for Coins/Strength (values are tables {first, second} or
+--   strings like "1,234"), so tonumber(Coins) returns nil and the old code
+--   thought Coins were "unknown" forever. It then only ever tried the first
+--   10 sabers (Starter..Cursed) - which you already own if you're past them -
+--   and never reached your real next saber.
+--   v5 fixes it: it reads Coins with the game's own InfiniteMath module,
+--   compares Coins >= Price with InfiniteMath, detects your current saber
+--   from Best_Saber_Index AND from your Backpack/Character tools, and if
+--   Coins still can't be read it cycles through ALL 449 sabers in batches
+--   of 20 instead of only the first 10.
 --
 -- CONFIRMED by RemoteSpy (2026-11-23, your capture):
 --   UIAction:FireServer("BuyWeapon", "Daze")
@@ -160,14 +162,15 @@ game:GetService("UserInputService").InputBegan:Connect(function(input, g)
 	if input.KeyCode == Enum.KeyCode.F then setRunning(not running) end
 end)
 
--- ===== AUTO-BUY SABER (fixed) =====
+-- ===== AUTO-BUY SABER (v5: InfiniteMath Coins) =====
 local ItemInfo = require(ReplicatedStorage.Modules.ItemInfo)
 local Swords = ItemInfo.Swords
 local SwordsOrder = ItemInfo.Swords_Order
+local InfiniteMath = require(ReplicatedStorage.Modules.InfiniteMath)
 
 local clientData = nil
-local assumedIndex = 1 -- persistent: next saber to try when we can't read your current one
-local lastBuyTarget, lastBuyCoinsBefore = nil, nil
+local buyCursor = 1 -- persistent cursor for the blind cycle: moves through ALL sabers, wraps to 1
+local lastBuyTarget = nil
 
 local function indexOfSaber(name)
 	for i, n in ipairs(SwordsOrder) do if n == name then return i end end
@@ -178,49 +181,98 @@ pcall(function()
 	Events.UpdateClientData.OnClientEvent:Connect(function(data)
 		if type(data) ~= "table" then return end
 		clientData = data
-		-- If the saber we just tried to buy is now equipped, move on to the next one
 		local saber = data.Saber or data.CurrentSaber or data.EquippedSaber
 		if saber and lastBuyTarget and saber == lastBuyTarget then
-			assumedIndex = indexOfSaber(saber) + 1
-			print("[AutoFarm] Bought saber confirmed: " .. saber .. " -> next index " .. assumedIndex)
+			print("[AutoFarm] Bought saber confirmed: " .. saber)
 			lastBuyTarget = nil
 		end
 	end)
 	Events.RequestClientData:FireServer()
 end)
 
-local function getCoins()
-	local ls = Players.LocalPlayer:FindFirstChild("leaderstats")
-	if ls then
-		local c = ls:FindFirstChild("Coins")
-		if c then return tonumber(c.Value) end
+-- Coins are InfiniteMath values in this game (table {first, second} or
+-- a string like "1,234"), NOT plain numbers - tonumber() returns nil on them.
+-- Convert any form to an InfiniteMath value, or nil if we truly can't read it.
+local function toIM(value)
+	if value == nil then return nil end
+	local ok, im = pcall(function() return InfiniteMath.new(value) end)
+	if ok and im then return im end
+	if type(value) == "string" then
+		-- "1.23K" / "12.3M" style - strip suffix, tonumber the front part
+		local num = tonumber((value:gsub(",", ""):gsub("[KMBtqQ]", "")))
+		if num then
+			local ok2, im2 = pcall(function() return InfiniteMath.new(num) end)
+			if ok2 then return im2 end
+		end
 	end
-	if clientData then return tonumber(clientData.Coins or clientData.coins) end
 	return nil
 end
 
+local function getCoinsIM()
+	local ls = Players.LocalPlayer:FindFirstChild("leaderstats")
+	if ls then
+		local c = ls:FindFirstChild("Coins")
+		if c then
+			local im = toIM(c.Value)
+			if im then return im, "leaderstats (" .. typeof(c.Value) .. ")" end
+		end
+	end
+	if clientData then
+		local raw = clientData.Coins or clientData.coins
+		if raw ~= nil then
+			local im = toIM(raw)
+			if im then return im, "clientData (" .. typeof(raw) .. ")" end
+			-- Still unknown, but print the type once so the console shows WHY
+			print("[AutoFarm] Coins raw type=" .. typeof(raw) .. " value=" .. tostring(raw))
+		end
+		if clientData.Data then
+			local im = toIM(clientData.Data.Coins)
+			if im then return im, "clientData.Data" end
+		end
+	end
+	return nil, nil
+end
+
 local function getCurrentSaber()
-	if clientData then return clientData.Saber or clientData.CurrentSaber or clientData.EquippedSaber end
+	if clientData then
+		-- StatsCalculator uses data.Saber (string) and data.Best_Saber_Index (number)
+		if clientData.Saber then return clientData.Saber end
+		if clientData.CurrentSaber then return clientData.CurrentSaber end
+		if clientData.EquippedSaber then return clientData.EquippedSaber end
+		if clientData.Best_Saber_Index then
+			local name = SwordsOrder[clientData.Best_Saber_Index]
+			if name then return name end
+		end
+	end
+	-- Fallback: the equipped saber is a Tool in your Backpack / Character
+	local lp = Players.LocalPlayer
+	for _, container in ipairs({ lp:FindFirstChild("Backpack"), lp.Character }) do
+		if container then
+			for _, tool in ipairs(container:GetChildren()) do
+				if tool:IsA("Tool") and Swords[tool.Name] then return tool.Name end
+			end
+		end
+	end
 	return nil
 end
 
 local function tryBuySaber()
 	if not AUTO_BUY or unloaded then return end
-	local coins = getCoins()
+	local coinsIM, coinsSource = getCoinsIM()
 	local current = getCurrentSaber()
-	-- Sync assumedIndex from the real current saber when we know it
-	if current then assumedIndex = indexOfSaber(current) + 1 end
 	local currentGain = (current and Swords[current] and Swords[current].AmountPerClick) or 0
-	print("[AutoFarm] Buy check: Coins=" .. tostring(coins) .. " current=" .. tostring(current))
+	print("[AutoFarm] Buy check: Coins=" .. (coinsIM and tostring(coinsIM) or "UNKNOWN") .. " source=" .. tostring(coinsSource) .. " current=" .. tostring(current))
 
-	if coins then
-		-- Best affordable saber BETTER than current
+	if coinsIM then
+		-- Best affordable saber BETTER than current, compared with InfiniteMath
 		local target = nil
 		for _, name in ipairs(SwordsOrder) do
 			local info = Swords[name]
-			local price = info and tonumber(info.Price)
-			if info and price and info.AmountPerClick > currentGain and coins >= price then
-				if not target or info.AmountPerClick > Swords[target].AmountPerClick then target = name end
+			if info and info.AmountPerClick > currentGain then
+				local priceIM = toIM(info.Price)
+				if priceIM and coinsIM >= priceIM then
+					if not target or info.AmountPerClick > Swords[target].AmountPerClick then target = name end
+				end
 			end
 		end
 		if not target then
@@ -229,25 +281,28 @@ local function tryBuySaber()
 		end
 		print("[AutoFarm] Buying best: " .. target .. " price=" .. tostring(Swords[target].Price))
 		lastBuyTarget = target
-		lastBuyCoinsBefore = coins
 		local args = { BUY_ACTION, target }
 		pcall(function() UIAction:FireServer(unpack(args)) end)
-		-- Assume it worked so next check looks higher; UpdateClientData will correct us if not
-		currentGain = Swords[target].AmountPerClick
 	else
-		-- Coins UNKNOWN - don't skip. Try the next 10 sabers in order, cheapest first.
-		-- Server rejects unaffordable ones, buys affordable ones. This also
-		-- handles games that require buying in order.
-		print("[AutoFarm] Buy check: Coins unknown - trying next 10 from index " .. assumedIndex)
-		for i = assumedIndex, math.min(assumedIndex + 9, #SwordsOrder) do
+		-- Coins STILL unknown: cycle through ALL sabers in batches of 20,
+		-- starting where we left off, wrapping around. The server rejects
+		-- unaffordable ones and buys affordable ones, wherever you are
+		-- in the progression - not just the first 10 cheap ones.
+		if current then buyCursor = indexOfSaber(current) + 1 end
+		if buyCursor < 1 or buyCursor > #SwordsOrder then buyCursor = 1 end
+		local last = math.min(buyCursor + 19, #SwordsOrder)
+		print("[AutoFarm] Buy check: Coins unknown - trying sabers " .. buyCursor .. "-" .. last .. " of " .. #SwordsOrder)
+		for i = buyCursor, last do
 			if unloaded then break end
 			local name = SwordsOrder[i]
 			print("[AutoFarm] Trying: " .. name .. " price=" .. tostring(Swords[name].Price))
 			lastBuyTarget = name
 			local args = { BUY_ACTION, name }
 			pcall(function() UIAction:FireServer(unpack(args)) end)
-			task.wait(0.3)
+			task.wait(0.15)
 		end
+		buyCursor = last + 1
+		if buyCursor > #SwordsOrder then buyCursor = 1 end
 	end
 end
 
@@ -276,4 +331,4 @@ task.spawn(function()
 	end
 end)
 
-print("[AutoFarm] Loaded v3 + X/Minimize. Click START or press F. – = minimize, X = unload (stops all loops).")
+print("[AutoFarm] Loaded v5 (InfiniteMath Coins fix) + X/Minimize. Click START or press F. – = minimize, X = unload (stops all loops).")
