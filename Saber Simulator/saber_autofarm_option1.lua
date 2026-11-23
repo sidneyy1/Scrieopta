@@ -1,4 +1,4 @@
--- Saber Simulator - Auto-Swing + Auto-Sell + Auto-Buy Saber + Auto-Buy DNA (MAIN script, v8 - Rayfield)
+-- Saber Simulator - Auto-Swing + Auto-Sell + Auto-Buy Saber + Auto-Buy DNA (MAIN script, v9 - Rayfield)
 -- v7: GUI switched to Rayfield (Sirius) - https://docs.sirius.menu/rayfield/
 --   local Rayfield = loadstring(game:HttpGet('https://sirius.menu/rayfield'))()
 --   Rayfield is the most-used UI on mobile executors, with a built-in
@@ -81,7 +81,7 @@ local SELL_EVERY_SECONDS = 10
 local AUTO_BUY = true
 local AUTO_BUY_DNA = false -- Auto-Buy DNA is an OPTION, off by default (it spends the same Coins as sabers)
 local BUY_CHECK_EVERY = 5
-local BUY_DNA_ACTION = "BuyDNA" -- NOT confirmed yet (see tryBuyDNA below)
+local BUY_DNA_ACTION = "BuyDNA" -- CONFIRMED by RemoteSpy: UIAction:FireServer("BuyDNA", "Berzerk DNA")
 local BUY_ACTION = "BuyWeapon" -- CONFIRMED by RemoteSpy: UIAction:FireServer("BuyWeapon", "Daze")
 -- ====================
 
@@ -314,6 +314,11 @@ pcall(function()
 			print("[AutoFarm] Bought saber confirmed: " .. saber)
 			lastBuyTarget = nil
 		end
+		if data.DNA and lastBuyDNATarget and data.DNA == lastBuyDNATarget then
+			print("[AutoFarm] Bought DNA confirmed: " .. data.DNA)
+			updateDNAInfo("Bought DNA confirmed: " .. data.DNA)
+			lastBuyDNATarget = nil
+		end
 	end)
 	Events.RequestClientData:FireServer()
 end)
@@ -438,16 +443,16 @@ local function tryBuySaber()
 	end
 end
 
--- ===== AUTO-BUY DNA (v8) =====
+-- ===== AUTO-BUY DNA (v8, fixed v9) =====
 -- From the export: ItemInfo.DNAs[name] = {MaxStorage, Price} (Coins, except
 -- VIP DNA which is Robux and is already excluded from DNAs_Order),
 -- DNAs_Order is sorted by MaxStorage, current DNA is data.DNA
 -- (StatsCalculator uses DNAs[data.DNA]).
--- WARNING - buy action NOT confirmed: the export has no server code, so
--- "BuyDNA" is a guess by analogy with the CONFIRMED "BuyWeapon" for sabers
--- (UIAction:FireServer("BuyWeapon", "Daze")). If DNA doesn't buy, do a
--- RemoteSpy capture of one manual DNA buy in-game and send me that line -
--- it will show the real action name, like it did for sabers.
+-- CONFIRMED by RemoteSpy (2026-11-23, your capture):
+--   UIAction:FireServer("BuyDNA", "Berzerk DNA")
+-- v9 fix: the buy loop used to only run while Auto-Farm was ON, so turning
+-- on Auto-Buy DNA alone did nothing - the DNA check never ran. Buy checks
+-- now run whenever the farm is on OR either buy toggle is on.
 local function indexOfDNA(name)
 	for i, n in ipairs(DNAsOrder) do if n == name then return i end end
 	return 0
@@ -458,13 +463,15 @@ local function getCurrentDNA()
 	return nil
 end
 
+local dnaAttempts = 0
 local function tryBuyDNA()
 	if not AUTO_BUY_DNA or unloaded then return end
+	dnaAttempts += 1
 	local coinsIM, coinsSource = getCoinsIM()
 	local current = getCurrentDNA()
 	local currentStorage = (current and DNAs[current] and DNAs[current].MaxStorage) or 0
-	print("[AutoFarm] DNA check: Coins=" .. (coinsIM and tostring(coinsIM) or "UNKNOWN") .. " current=" .. tostring(current))
-	updateDNAInfo("Coins: " .. (coinsIM and tostring(coinsIM) or "UNKNOWN") .. " | Current: " .. tostring(current))
+	print("[AutoFarm] DNA check #" .. dnaAttempts .. ": Coins=" .. (coinsIM and tostring(coinsIM) or "UNKNOWN") .. " current=" .. tostring(current))
+	updateDNAInfo("Check #" .. dnaAttempts .. " | Coins: " .. (coinsIM and tostring(coinsIM) or "UNKNOWN") .. " | Current: " .. tostring(current))
 
 	if coinsIM then
 		-- Best affordable DNA with MORE storage than current, Coins only (skip Robux)
@@ -484,7 +491,7 @@ local function tryBuyDNA()
 			return
 		end
 		print("[AutoFarm] Buying DNA: " .. target .. " price=" .. tostring(DNAs[target].Price))
-		updateDNAInfo("Buying DNA: " .. target .. " | Price: " .. tostring(DNAs[target].Price))
+		updateDNAInfo("Sent buy for DNA: " .. target .. " | Price: " .. tostring(DNAs[target].Price) .. " | Coins: " .. tostring(coinsIM))
 		if useRayfield then pcall(function() Rayfield:Notify({ Title = "Auto-Buy DNA", Content = "Buying " .. target, Duration = 3 }) end) end
 		lastBuyDNATarget = target
 		local args = { BUY_DNA_ACTION, target }
@@ -588,13 +595,18 @@ MainTab:CreateButton({
 })
 end -- if useRayfield
 
+-- v9: buy checks run even when the farm toggle is OFF, as long as a buy
+-- toggle is on - before this, Auto-Buy DNA on its own never ran a check.
 task.spawn(function()
 	while not unloaded do
 		task.wait(BUY_CHECK_EVERY)
 		if unloaded then break end
-		if running then
+		if running or AUTO_BUY or AUTO_BUY_DNA then
 			tryBuySaber() -- sabers first (priority for Coins)
-			if AUTO_BUY_DNA then tryBuyDNA() end
+			if AUTO_BUY_DNA then
+				task.wait(0.5) -- don't fire two UIAction calls in the same tick
+				tryBuyDNA()
+			end
 		end
 	end
 end)
@@ -628,4 +640,4 @@ end)
 if useRayfield then
 	pcall(function() Rayfield:Notify({ Title = "Saber Auto-Farm", Content = "Loaded. Turn on Auto-Farm in the Main tab.", Duration = 5 }) end)
 end
-print("[AutoFarm] Loaded v8 (Rayfield + Auto-Buy DNA" .. (useRayfield and "" or " FAILED - simple GUI") .. " + InfiniteMath Coins fix). Minimize: Rayfield top-bar button. Unload: button in Main tab.")
+print("[AutoFarm] Loaded v9 (Rayfield + Auto-Buy DNA fix" .. (useRayfield and "" or " FAILED - simple GUI") .. " + InfiniteMath Coins fix). Minimize: Rayfield top-bar button. Unload: button in Main tab.")
