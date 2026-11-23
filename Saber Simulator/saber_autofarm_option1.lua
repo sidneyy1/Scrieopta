@@ -38,6 +38,7 @@ local BUY_ACTION = "BuyWeapon" -- CONFIRMED by RemoteSpy: UIAction:FireServer("B
 -- ====================
 
 local running = false
+local unloaded = false -- set to true by the X button, all loops check this and stop
 local swingCount = 0
 local lastSell = tick()
 
@@ -46,32 +47,104 @@ gui.Name = "SaberAutoFarm"
 gui.ResetOnSpawn = false
 gui.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
 
+-- Main panel (holds everything, so Minimize can hide it in one go)
+local mainFrame = Instance.new("Frame")
+mainFrame.Size = UDim2.new(0, 200, 0, 96)
+mainFrame.Position = UDim2.new(0, 16, 0, 120)
+mainFrame.BackgroundColor3 = Color3.fromRGB(30, 30, 30)
+mainFrame.BorderSizePixel = 0
+mainFrame.Parent = gui
+
+local title = Instance.new("TextLabel")
+title.Size = UDim2.new(1, -64, 0, 24)
+title.Position = UDim2.new(0, 8, 0, 0)
+title.BackgroundTransparency = 1
+title.TextColor3 = Color3.fromRGB(255, 255, 255)
+title.TextSize = 14
+title.Font = Enum.Font.SourceSansBold
+title.TextXAlignment = Enum.TextXAlignment.Left
+title.Text = "Saber Auto-Farm"
+title.Parent = mainFrame
+
+-- Minimize button (–): hides the panel, shows a small restore button instead
+local minimizeBtn = Instance.new("TextButton")
+minimizeBtn.Size = UDim2.new(0, 24, 0, 24)
+minimizeBtn.Position = UDim2.new(1, -56, 0, 0)
+minimizeBtn.BackgroundColor3 = Color3.fromRGB(60, 60, 60)
+minimizeBtn.TextColor3 = Color3.fromRGB(255, 255, 255)
+minimizeBtn.TextSize = 16
+minimizeBtn.Font = Enum.Font.SourceSansBold
+minimizeBtn.Text = "–"
+minimizeBtn.Parent = mainFrame
+
+-- Close / Unload button (X): stops everything and removes the script's GUI
+local closeBtn = Instance.new("TextButton")
+closeBtn.Size = UDim2.new(0, 24, 0, 24)
+closeBtn.Position = UDim2.new(1, -28, 0, 0)
+closeBtn.BackgroundColor3 = Color3.fromRGB(170, 40, 40)
+closeBtn.TextColor3 = Color3.fromRGB(255, 255, 255)
+closeBtn.TextSize = 16
+closeBtn.Font = Enum.Font.SourceSansBold
+closeBtn.Text = "X"
+closeBtn.Parent = mainFrame
+
+-- Small floating button shown while minimized - click to restore the panel
+local miniBtn = Instance.new("TextButton")
+miniBtn.Size = UDim2.new(0, 64, 0, 28)
+miniBtn.Position = UDim2.new(0, 16, 0, 120)
+miniBtn.BackgroundColor3 = Color3.fromRGB(30, 30, 30)
+miniBtn.TextColor3 = Color3.fromRGB(255, 255, 255)
+miniBtn.TextSize = 14
+miniBtn.Font = Enum.Font.SourceSansBold
+miniBtn.Text = "Saber +"
+miniBtn.Visible = false
+miniBtn.Parent = gui
+
 local button = Instance.new("TextButton")
-button.Size = UDim2.new(0, 170, 0, 44)
-button.Position = UDim2.new(0, 16, 0, 120)
-button.BackgroundColor3 = Color3.fromRGB(30, 30, 30)
+button.Size = UDim2.new(0, 184, 0, 36)
+button.Position = UDim2.new(0, 8, 0, 28)
+button.BackgroundColor3 = Color3.fromRGB(50, 50, 50)
 button.TextColor3 = Color3.fromRGB(255, 255, 255)
 button.TextSize = 16
 button.Font = Enum.Font.SourceSansBold
 button.Text = "START Auto-Farm"
-button.Parent = gui
+button.Parent = mainFrame
 
 local status = Instance.new("TextLabel")
-status.Size = UDim2.new(0, 170, 0, 22)
-status.Position = UDim2.new(0, 16, 0, 168)
+status.Size = UDim2.new(1, -16, 0, 22)
+status.Position = UDim2.new(0, 8, 0, 68)
 status.BackgroundTransparency = 1
 status.TextColor3 = Color3.fromRGB(255, 255, 255)
 status.TextSize = 14
 status.Text = "Stopped | Swings: 0"
-status.Parent = gui
+status.Parent = mainFrame
 
 pcall(function() gui.Parent = game:GetService("CoreGui") end)
 if not gui.Parent then gui.Parent = Players.LocalPlayer:WaitForChild("PlayerGui") end
 
+local function unload()
+	if unloaded then return end
+	unloaded = true
+	running = false
+	print("[AutoFarm] Unloaded - all loops stopped, GUI removed. Re-run the loadstring to start again.")
+	pcall(function() gui:Destroy() end)
+end
+
+minimizeBtn.MouseButton1Click:Connect(function()
+	mainFrame.Visible = false
+	miniBtn.Visible = true
+end)
+miniBtn.MouseButton1Click:Connect(function()
+	mainFrame.Visible = true
+	miniBtn.Visible = false
+end)
+closeBtn.MouseButton1Click:Connect(unload)
+
 local function setRunning(value)
+	if unloaded then return end
 	running = value
 	button.Text = running and "STOP Auto-Farm" or "START Auto-Farm"
-	button.BackgroundColor3 = running and Color3.fromRGB(170, 40, 40) or Color3.fromRGB(30, 30, 30)
+	button.BackgroundColor3 = running and Color3.fromRGB(170, 40, 40) or Color3.fromRGB(50, 50, 50)
 	if not running then status.Text = "Stopped | Swings: " .. swingCount end
 end
 
@@ -168,15 +241,16 @@ local function tryBuySaber()
 end
 
 task.spawn(function()
-	while true do
+	while not unloaded do
 		task.wait(BUY_CHECK_EVERY)
+		if unloaded then break end
 		if running then tryBuySaber() end
 	end
 end)
 
 -- Main swing/sell loop
 task.spawn(function()
-	while true do
+	while not unloaded do
 		if running then
 			local ok, err = pcall(function() SwingSaber:FireServer() end)
 			if ok then
@@ -191,4 +265,4 @@ task.spawn(function()
 	end
 end)
 
-print("[AutoFarm] Loaded v3. Click START or press F.")
+print("[AutoFarm] Loaded v3 + X/Minimize. Click START or press F. – = minimize, X = unload (stops all loops).")
