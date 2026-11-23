@@ -1,4 +1,4 @@
--- Saber Simulator - Auto-Swing + Auto-Sell + Auto-Buy Saber + Auto-Buy DNA (MAIN script, v15 - Rayfield)
+-- Saber Simulator - Auto-Swing + Auto-Sell + Auto-Buy Saber + Auto-Buy DNA (MAIN script, v16 - Rayfield)
 -- v7: GUI switched to Rayfield (Sirius) - https://docs.sirius.menu/rayfield/
 --   local Rayfield = loadstring(game:HttpGet('https://sirius.menu/rayfield'))()
 --   Rayfield is the most-used UI on mobile executors, with a built-in
@@ -315,8 +315,17 @@ local function indexOfSaber(name)
 end
 
 pcall(function()
-	Events.UpdateClientData.OnClientEvent:Connect(function(data)
-		if type(data) ~= "table" then return end
+	Events.UpdateClientData.OnClientEvent:Connect(function(...)
+		-- The server may send the data as the 1st arg, or after another arg,
+		-- so scan all args for the table that looks like player data.
+		local data = nil
+		for _, a in ipairs({...}) do
+			if type(a) == "table" then
+				if a.Coins ~= nil or a.Saber ~= nil or a.DNA ~= nil or a.Data ~= nil or a.Best_Saber_Index ~= nil then data = a break end
+				if not data then data = a end
+			end
+		end
+		if not data then return end
 		clientData = data
 		-- Record the top-level keys the game actually sends, so the DNA line
 		-- can show them when auto-detect fails (tells us the real field name).
@@ -561,6 +570,12 @@ updateOwnedInfo = function()
 	local dnaText = dna or "?"
 	if dna and DNAs[dna] then
 		dnaText = dna .. " (" .. tostring(DNAs[dna].MaxStorage) .. " storage)"
+	elseif not clientData then
+		dnaText = "? (no game data yet - press Show My Saber & DNA)"
+	elseif clientDataKeys ~= "" then
+		dnaText = "? (data has no DNA field - keys: " .. string.sub(clientDataKeys, 1, 80) .. ")"
+	else
+		dnaText = "? (type it in 'My current DNA' box)"
 	end
 	local coinsIM = getCoinsIM()
 	local text = "Saber: " .. saberText .. " | DNA: " .. dnaText .. " | Coins: " .. (coinsIM and tostring(coinsIM) or "?")
@@ -841,4 +856,4 @@ end)
 if useRayfield then
 	pcall(function() Rayfield:Notify({ Title = "Saber Auto-Farm", Content = "Loaded. Turn on Auto-Farm in the Main tab.", Duration = 5 }) end)
 end
-print("[AutoFarm] Loaded v15 (Rayfield + Owned saber/DNA display" .. (useRayfield and "" or " FAILED - simple GUI") .. " + InfiniteMath Coins fix). Minimize: Rayfield top-bar button. Unload: button in Main tab.")
+print("[AutoFarm] Loaded v16 (Rayfield + DNA ? diagnosis" .. (useRayfield and "" or " FAILED - simple GUI") .. " + InfiniteMath Coins fix). Minimize: Rayfield top-bar button. Unload: button in Main tab.")
