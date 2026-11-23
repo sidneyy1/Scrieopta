@@ -1,8 +1,10 @@
--- Saber Simulator - Auto-Swing + Auto-Sell + Auto-Buy Saber (MAIN script, v6.2 - WindUI + fallback)
--- v6.2: a "Loading..." label appears on screen the INSTANT the file runs,
--- before anything else (before WaitForChild, before WindUI). If you don't
--- even see that label, the loadstring itself never ran / GitHub served a
--- cached copy - try again in a few minutes or rejoin first.
+-- Saber Simulator - Auto-Swing + Auto-Sell + Auto-Buy Saber (MAIN script, v6.3 - WindUI + fallback)
+-- v6.3 (mobile): the user is on MOBILE and can't see the console, so ALL
+-- diagnostics are now ON-SCREEN, not console-only. The loading label stays
+-- up for 5 seconds saying WindUI OK / WindUI failed, and the simple GUI's
+-- status line shows Coins / current saber / last buy, so buying can be
+-- checked without opening a console. No keyboard needed on mobile:
+-- use the on-screen toggle/button, not F or RightShift.
 -- GUI: WindUI by Footagesus - https://github.com/Footagesus/WindUI
 --   local WindUI = loadstring(game:HttpGet("https://raw.githubusercontent.com/Footagesus/WindUI/main/dist/main.lua"))()
 --   Minimize/reopen: RightShift (WindUI toggle key) or the floating Open button | Unload: "Unload Script" button in the Main tab
@@ -139,7 +141,7 @@ if not useWindUI then
 	simpleGui.ResetOnSpawn = false
 	simpleGui.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
 	simpleFrame = Instance.new("Frame")
-	simpleFrame.Size = UDim2.new(0, 200, 0, 96)
+	simpleFrame.Size = UDim2.new(0, 220, 0, 120)
 	simpleFrame.Position = UDim2.new(0, 16, 0, 120)
 	simpleFrame.BackgroundColor3 = Color3.fromRGB(30, 30, 30)
 	simpleFrame.BorderSizePixel = 0
@@ -192,11 +194,12 @@ if not useWindUI then
 	simpleButton.Text = "START Auto-Farm"
 	simpleButton.Parent = simpleFrame
 	simpleStatus = Instance.new("TextLabel")
-	simpleStatus.Size = UDim2.new(1, -16, 0, 22)
+	simpleStatus.Size = UDim2.new(1, -16, 0, 44)
 	simpleStatus.Position = UDim2.new(0, 8, 0, 68)
 	simpleStatus.BackgroundTransparency = 1
 	simpleStatus.TextColor3 = Color3.fromRGB(255, 255, 255)
-	simpleStatus.TextSize = 14
+	simpleStatus.TextSize = 13
+	simpleStatus.TextWrapped = true
 	simpleStatus.Text = "Stopped | Swings: 0"
 	simpleStatus.Parent = simpleFrame
 	pcall(function() simpleGui.Parent = game:GetService("CoreGui") end)
@@ -220,6 +223,9 @@ local function updateBuyInfo(text)
 	if useWindUI and buyPara then
 		pcall(function() buyPara:SetDesc(text) end)
 		pcall(function() buyPara:SetTitle(text) end)
+	elseif simpleStatus then
+		-- Mobile: show buy info on the simple GUI itself, no console needed
+		pcall(function() simpleStatus.Text = text end)
 	end
 end
 
@@ -499,8 +505,16 @@ task.spawn(function()
 	end
 end)
 
-pcall(function() _loadingGui:Destroy() end)
+-- Mobile: keep the loading label on screen for 5s with the result,
+-- so it can be read without a console, then remove it.
+pcall(function()
+	_loadingLabel.Text = useWindUI and "WindUI loaded OK - turn on Auto-Farm" or "WindUI failed - simple GUI loaded"
+end)
+task.spawn(function()
+	task.wait(5)
+	pcall(function() _loadingGui:Destroy() end)
+end)
 if useWindUI then
 	pcall(function() WindUI:Notify({ Title = "Saber Auto-Farm", Content = "Loaded. Turn on Auto-Farm in the Main tab.", Icon = "check" }) end)
 end
-print("[AutoFarm] Loaded v6.2 (WindUI" .. (useWindUI and "" or " FAILED - simple GUI") .. " + InfiniteMath Coins fix). Minimize: RightShift or the floating Open button. Unload: button in Main tab.")
+print("[AutoFarm] Loaded v6.3 (WindUI" .. (useWindUI and "" or " FAILED - simple GUI") .. " + InfiniteMath Coins fix). Minimize: RightShift or the floating Open button. Unload: button in Main tab.")
