@@ -1,4 +1,4 @@
--- Saber Simulator - Auto-Swing + Auto-Sell + Auto-Buy Saber (MAIN script, v7 - Rayfield)
+-- Saber Simulator - Auto-Swing + Auto-Sell + Auto-Buy Saber + Auto-Buy DNA (MAIN script, v8 - Rayfield)
 -- v7: GUI switched to Rayfield (Sirius) - https://docs.sirius.menu/rayfield/
 --   local Rayfield = loadstring(game:HttpGet('https://sirius.menu/rayfield'))()
 --   Rayfield is the most-used UI on mobile executors, with a built-in
@@ -79,7 +79,9 @@ local SWING_DELAY = 0.25
 local SELL_EVERY_SWINGS = 50
 local SELL_EVERY_SECONDS = 10
 local AUTO_BUY = true
+local AUTO_BUY_DNA = false -- Auto-Buy DNA is an OPTION, off by default (it spends the same Coins as sabers)
 local BUY_CHECK_EVERY = 5
+local BUY_DNA_ACTION = "BuyDNA" -- NOT confirmed yet (see tryBuyDNA below)
 local BUY_ACTION = "BuyWeapon" -- CONFIRMED by RemoteSpy: UIAction:FireServer("BuyWeapon", "Daze")
 -- ====================
 
@@ -94,7 +96,7 @@ local lastSell = tick()
 -- still loads and works. No more silent "not loading".
 print("[AutoFarm] Starting... loading Rayfield...")
 local useRayfield = false
-local Rayfield, Window, MainTab, statusPara, buyPara
+local Rayfield, Window, MainTab, statusPara, buyPara, dnaPara
 local rayOk, rayResult = pcall(function()
 	return loadstring(game:HttpGet("https://sirius.menu/rayfield"))()
 end)
@@ -116,6 +118,7 @@ if rayOk and rayResult then
 		MainTab = Window:CreateTab("Main", nil)
 		statusPara = MainTab:CreateParagraph({ Title = "Status", Content = "Stopped | Swings: 0" })
 		buyPara = MainTab:CreateParagraph({ Title = "Buy", Content = "Auto-Buy: ON - waiting for first check (every 5s while running)" })
+		dnaPara = MainTab:CreateParagraph({ Title = "DNA", Content = "Auto-Buy DNA: OFF - turn it on in the Main tab" })
 	else
 		print("[AutoFarm] Rayfield window failed: " .. tostring(winResult) .. " - using simple GUI instead")
 	end
@@ -220,6 +223,14 @@ local function updateBuyInfo(text)
 		pcall(function() simpleStatus.Text = text end)
 	end
 end
+local function updateDNAInfo(text)
+	if useRayfield and dnaPara then
+		pcall(function() dnaPara:Set({ Title = "DNA", Content = text }) end)
+		pcall(function() dnaPara:SetTitle(text) end)
+	elseif simpleStatus then
+		pcall(function() simpleStatus.Text = text end)
+	end
+end
 
 local autoFarmToggle = nil -- created in the controls section below (Rayfield only)
 
@@ -279,11 +290,15 @@ end)
 local ItemInfo = require(ReplicatedStorage.Modules.ItemInfo)
 local Swords = ItemInfo.Swords
 local SwordsOrder = ItemInfo.Swords_Order
+local DNAs = ItemInfo.DNAs
+local DNAsOrder = ItemInfo.DNAs_Order -- sorted by MaxStorage, VIP DNA + Infinite excluded
 local InfiniteMath = require(ReplicatedStorage.Modules.InfiniteMath)
 
 local clientData = nil
 local buyCursor = 1 -- persistent cursor for the blind cycle: moves through ALL sabers, wraps to 1
+local dnaCursor = 1 -- same for DNA
 local lastBuyTarget = nil
+local lastBuyDNATarget = nil
 
 local function indexOfSaber(name)
 	for i, n in ipairs(SwordsOrder) do if n == name then return i end end
@@ -423,6 +438,79 @@ local function tryBuySaber()
 	end
 end
 
+-- ===== AUTO-BUY DNA (v8) =====
+-- From the export: ItemInfo.DNAs[name] = {MaxStorage, Price} (Coins, except
+-- VIP DNA which is Robux and is already excluded from DNAs_Order),
+-- DNAs_Order is sorted by MaxStorage, current DNA is data.DNA
+-- (StatsCalculator uses DNAs[data.DNA]).
+-- WARNING - buy action NOT confirmed: the export has no server code, so
+-- "BuyDNA" is a guess by analogy with the CONFIRMED "BuyWeapon" for sabers
+-- (UIAction:FireServer("BuyWeapon", "Daze")). If DNA doesn't buy, do a
+-- RemoteSpy capture of one manual DNA buy in-game and send me that line -
+-- it will show the real action name, like it did for sabers.
+local function indexOfDNA(name)
+	for i, n in ipairs(DNAsOrder) do if n == name then return i end end
+	return 0
+end
+
+local function getCurrentDNA()
+	if clientData then return clientData.DNA or clientData.CurrentDNA or clientData.EquippedDNA end
+	return nil
+end
+
+local function tryBuyDNA()
+	if not AUTO_BUY_DNA or unloaded then return end
+	local coinsIM, coinsSource = getCoinsIM()
+	local current = getCurrentDNA()
+	local currentStorage = (current and DNAs[current] and DNAs[current].MaxStorage) or 0
+	print("[AutoFarm] DNA check: Coins=" .. (coinsIM and tostring(coinsIM) or "UNKNOWN") .. " current=" .. tostring(current))
+	updateDNAInfo("Coins: " .. (coinsIM and tostring(coinsIM) or "UNKNOWN") .. " | Current: " .. tostring(current))
+
+	if coinsIM then
+		-- Best affordable DNA with MORE storage than current, Coins only (skip Robux)
+		local target = nil
+		for _, name in ipairs(DNAsOrder) do
+			local info = DNAs[name]
+			if info and info.Currency ~= "Robux" and info.MaxStorage > currentStorage then
+				local priceIM = toIM(info.Price)
+				if priceIM and coinsIM >= priceIM then
+					if not target or info.MaxStorage > DNAs[target].MaxStorage then target = name end
+				end
+			end
+		end
+		if not target then
+			print("[AutoFarm] DNA check: no affordable upgrade yet")
+			updateDNAInfo("No affordable DNA upgrade yet | Coins: " .. tostring(coinsIM) .. " | Current: " .. tostring(current))
+			return
+		end
+		print("[AutoFarm] Buying DNA: " .. target .. " price=" .. tostring(DNAs[target].Price))
+		updateDNAInfo("Buying DNA: " .. target .. " | Price: " .. tostring(DNAs[target].Price))
+		if useRayfield then pcall(function() Rayfield:Notify({ Title = "Auto-Buy DNA", Content = "Buying " .. target, Duration = 3 }) end) end
+		lastBuyDNATarget = target
+		local args = { BUY_DNA_ACTION, target }
+		pcall(function() UIAction:FireServer(unpack(args)) end)
+	else
+		-- Coins unknown: cycle through ALL DNAs in batches of 20, like sabers
+		if current then dnaCursor = indexOfDNA(current) + 1 end
+		if dnaCursor < 1 or dnaCursor > #DNAsOrder then dnaCursor = 1 end
+		local last = math.min(dnaCursor + 19, #DNAsOrder)
+		print("[AutoFarm] DNA check: Coins unknown - trying DNAs " .. dnaCursor .. "-" .. last .. " of " .. #DNAsOrder)
+		for i = dnaCursor, last do
+			if unloaded then break end
+			local name = DNAsOrder[i]
+			if DNAs[name].Currency ~= "Robux" then
+				print("[AutoFarm] Trying DNA: " .. name .. " price=" .. tostring(DNAs[name].Price))
+				lastBuyDNATarget = name
+				local args = { BUY_DNA_ACTION, name }
+				pcall(function() UIAction:FireServer(unpack(args)) end)
+				task.wait(0.15)
+			end
+		end
+		dnaCursor = last + 1
+		if dnaCursor > #DNAsOrder then dnaCursor = 1 end
+	end
+end
+
 -- ===== RAYFIELD CONTROLS (Main tab) - skipped if Rayfield failed, simple GUI is already wired above =====
 if useRayfield then
 autoFarmToggle = MainTab:CreateToggle({
@@ -439,6 +527,16 @@ MainTab:CreateToggle({
 	Callback = function(state)
 		AUTO_BUY = state
 		updateBuyInfo(AUTO_BUY and "Auto-Buy: ON" or "Auto-Buy: OFF")
+	end,
+})
+
+MainTab:CreateToggle({
+	Name = "Auto-Buy DNA",
+	CurrentValue = false,
+	Flag = "AutoBuyDNAToggle",
+	Callback = function(state)
+		AUTO_BUY_DNA = state
+		updateDNAInfo(AUTO_BUY_DNA and "Auto-Buy DNA: ON" or "Auto-Buy DNA: OFF")
 	end,
 })
 
@@ -475,6 +573,16 @@ MainTab:CreateButton({
 })
 
 MainTab:CreateButton({
+	Name = "Buy Best DNA Now",
+	Callback = function()
+		local was = AUTO_BUY_DNA
+		AUTO_BUY_DNA = true -- one test buy only, toggle stays as it was
+		tryBuyDNA()
+		AUTO_BUY_DNA = was
+	end,
+})
+
+MainTab:CreateButton({
 	Name = "Unload Script",
 	Callback = function() unload() end,
 })
@@ -484,7 +592,10 @@ task.spawn(function()
 	while not unloaded do
 		task.wait(BUY_CHECK_EVERY)
 		if unloaded then break end
-		if running then tryBuySaber() end
+		if running then
+			tryBuySaber() -- sabers first (priority for Coins)
+			if AUTO_BUY_DNA then tryBuyDNA() end
+		end
 	end
 end)
 
@@ -517,4 +628,4 @@ end)
 if useRayfield then
 	pcall(function() Rayfield:Notify({ Title = "Saber Auto-Farm", Content = "Loaded. Turn on Auto-Farm in the Main tab.", Duration = 5 }) end)
 end
-print("[AutoFarm] Loaded v7 (Rayfield" .. (useRayfield and "" or " FAILED - simple GUI") .. " + InfiniteMath Coins fix). Minimize: Rayfield top-bar button. Unload: button in Main tab.")
+print("[AutoFarm] Loaded v8 (Rayfield + Auto-Buy DNA" .. (useRayfield and "" or " FAILED - simple GUI") .. " + InfiniteMath Coins fix). Minimize: Rayfield top-bar button. Unload: button in Main tab.")
